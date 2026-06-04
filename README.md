@@ -1,0 +1,218 @@
+<div align="center">
+
+<img src="docs/assets/hero.svg" alt="Oatmeal" width="100%" />
+
+<h3>Private, on-device meeting notes for macOS.</h3>
+<p><strong>Record any call, get a speaker-labeled transcript, AI notes, summaries &amp; action items, then chat with it.</strong><br/>
+Everything runs on your Mac. No cloud. No account. No bots in your meetings.</p>
+
+<p>
+  <img alt="Platform" src="https://img.shields.io/badge/macOS-14%2B-111?logo=apple&logoColor=white" />
+  <img alt="Swift" src="https://img.shields.io/badge/Swift-5.0-F05138?logo=swift&logoColor=white" />
+  <img alt="SwiftUI" src="https://img.shields.io/badge/SwiftUI-0A84FF?logo=swift&logoColor=white" />
+  <img alt="On-device" src="https://img.shields.io/badge/100%25-on--device-5C9A6B" />
+  <img alt="License" src="https://img.shields.io/badge/License-MIT-E08A3C" />
+  <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-F4B65C" />
+</p>
+
+<sub>Built with <a href="https://github.com/FluidInference/FluidAudio">FluidAudio</a> (Parakeet ASR + diarization), <a href="https://lmstudio.ai">LM Studio</a>, SwiftUI, and SwiftData</sub>
+
+</div>
+
+<br/>
+
+> **Why Oatmeal?** Meeting notetakers are wonderful, and they usually ship your most sensitive
+> conversations to someone else's servers. Oatmeal gives you the same magic (transcripts, AI
+> summaries, action items, and "chat with your meeting") while every byte of audio and every model
+> call stays on your machine. It's the cozy, private alternative.
+
+<br/>
+
+<div align="center">
+  <img src="docs/assets/app-enhanced.png" alt="Oatmeal meeting view with AI-enhanced notes" width="85%" />
+  <br/><sub>AI-enhanced notes with decisions, key numbers, and action items, grounded in the transcript.</sub>
+</div>
+
+<br/>
+
+## ✨ Highlights
+
+- 🎙️ **One-click capture:** records the other participants (system audio) **and** your mic. No meeting bots, no invite links.
+- 🗣️ **Speaker-labeled transcripts:** on-device diarization, with editable names, merge, and re-identify.
+- ✍️ **Notes that write themselves:** jot a few words, and the local LLM turns them into clean, structured notes.
+- 🧠 **Summaries &amp; action items:** decisions, owners, numbers, and follow-ups, extracted automatically.
+- 💬 **Chat with a meeting:** ask anything, and hybrid semantic + keyword retrieval grounds every answer in *that* meeting.
+- 🌍 **Ask across everything:** query your whole history with tappable source citations.
+- 🟢 **Live Assist:** private, real-time talking points during a call (great for interviews and sales).
+- 🪟 **Floating HUD:** a glanceable panel that stays above full-screen video calls.
+- ✅ **Tasks &amp; Reminders:** action items become tasks, and optionally sync to Apple Reminders.
+- 🔌 **Local MCP server:** expose meetings (read-only) to agents like Claude.
+- 🔒 **Private by design:** no cloud, no telemetry, no account. Data lives in `~/Library/Application Support/Oatmeal`.
+
+<br/>
+
+## 📸 A tour
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/assets/app-transcript.png" alt="Speaker-labeled transcript" /><br/>
+      <strong>Speaker-labeled transcript</strong><br/>
+      <sub>Diarized on-device. Rename, merge, or re-identify speakers anytime.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/assets/app-chat.png" alt="Chat with a meeting" /><br/>
+      <strong>Chat with the meeting</strong><br/>
+      <sub>Answers are grounded only in this meeting, and hybrid retrieval finds what was said.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/assets/app-ask.png" alt="Ask across all meetings" /><br/>
+      <strong>Ask across all meetings</strong><br/>
+      <sub>Cross-meeting answers with clickable source citations.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/assets/app-tasks.png" alt="Tasks extracted from meetings" /><br/>
+      <strong>Tasks, automatically</strong><br/>
+      <sub>Action items with owners and due dates, collected across every meeting.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/assets/app-analytics.png" alt="Meeting analytics" /><br/>
+      <strong>Analytics &amp; coaching</strong><br/>
+      <sub>Talk-time balance and conversation insights for each meeting.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/assets/app-people.png" alt="People directory" /><br/>
+      <strong>People</strong><br/>
+      <sub>Everyone you meet with, and the meetings you share.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/assets/app-palette.png" alt="Command palette" /><br/>
+      <strong>Command palette (⌘K)</strong><br/>
+      <sub>Jump to any meeting or run any command in a keystroke.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/assets/app-onboarding.png" alt="First-run onboarding" /><br/>
+      <strong>Friendly first run</strong><br/>
+      <sub>A short, private setup for mic, audio, and your local AI.</sub>
+    </td>
+  </tr>
+</table>
+
+<sub>Screens shown with fictional sample data.</sub>
+
+<br/>
+
+## 🚀 Quick start
+
+### Requirements
+
+- **macOS 14 (Sonoma)+**, Apple Silicon recommended
+- **Xcode 15+**
+- [**XcodeGen**](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
+- [**LM Studio**](https://lmstudio.ai) (or any OpenAI-compatible local server) for the AI features
+
+> The first recording downloads the Parakeet speech model (~450 MB) automatically.
+
+### 1 · Start your local AI
+
+Install LM Studio, download a modern instruct model with a healthy context window, and start
+its local server. Oatmeal talks to `http://127.0.0.1:1234` by default (configurable in
+**Settings → AI**).
+
+### 2 · Build & run
+
+```bash
+git clone https://github.com/superluis0/Oatmeal.git
+cd Oatmeal
+xcodegen generate        # generate Oatmeal.xcodeproj from project.yml
+open Oatmeal.xcodeproj    # build & run the "Oatmeal" scheme
+```
+
+Prefer a scripted install? `reinstall.sh` builds to `/tmp` (Xcode can't code-sign inside an
+iCloud-synced folder), installs to `~/Applications`, and signs with a **stable self-signed
+identity** so macOS remembers your Mic and Screen-Recording grants across rebuilds:
+
+```bash
+./reinstall.sh && open ~/Applications/Oatmeal.app
+```
+
+### 3 · Grant permissions on first launch
+
+| Permission | Why |
+|---|---|
+| **Microphone** | Transcribe your voice |
+| **Screen Recording** | Required by macOS to capture *system audio* (the other participants) |
+| **Calendar** *(optional)* | Auto-title meetings and show what's upcoming |
+| **Reminders** *(optional)* | Push action items to an "Oatmeal" list |
+
+> 💡 **Record with headphones.** Without them, the other party's audio plays out your speakers and
+> leaks into your mic, which can duplicate transcript lines. Oatmeal de-duplicates this echo
+> automatically, but headphones eliminate it at the source.
+
+<br/>
+
+## 🔒 Privacy
+
+Oatmeal is private by default:
+
+- Audio, transcripts, notes, and embeddings live **only on your Mac**.
+- Transcription and speaker diarization run **on-device**, so no audio is ever uploaded.
+- LLM features call **only** the local server URL you configure.
+- The optional webhook and MCP mirror are **off / local** unless you turn them on.
+
+<br/>
+
+## 🏗️ How it works
+
+```
+ ┌──────────────┐   mic + system audio    ┌────────────────────┐   text   ┌──────────────────┐
+ │  AVAudio      │ ─────────────────────▶ │  FluidAudio         │ ───────▶ │  LM Studio        │
+ │  capture      │   (16 kHz, stereo)     │  Parakeet ASR +     │          │  (local, OpenAI-  │
+ │  engine       │                        │  diarization        │          │   compatible API) │
+ └──────────────┘                         └────────────────────┘          └──────────────────┘
+                                                   │                                  │
+                                                   ▼                                  ▼
+                                          speaker-labeled                  summaries · notes · chat
+                                            transcript        ─────────▶   action items · live assist
+                                                   │                                  │
+                                                   ▼                                  ▼
+                                   ┌───────────────────────────────────────────────────────────┐
+                                   │  SwiftData  +  on-device embeddings (NLEmbedding) for RAG  │
+                                   └───────────────────────────────────────────────────────────┘
+```
+
+| Path | What |
+|---|---|
+| `Oatmeal/` | The macOS app (SwiftUI + SwiftData) |
+| `OatmealMCP/` | A minimal stdio MCP server exposing the read-only meeting mirror |
+| `project.yml` | XcodeGen project definition (the `.xcodeproj` is generated, not committed) |
+| `reinstall.sh` | Build, install, and self-sign helper |
+
+<br/>
+
+## 🧑‍💻 Contributing
+
+Issues and PRs are welcome! The Xcode project is generated by XcodeGen, so make project/target
+changes in **`project.yml`** and run `xcodegen generate` (don't edit the `.xcodeproj` directly).
+
+**Explore with sample data.** Oatmeal ships a safe, env-gated demo mode that seeds a throwaway
+store with fictional meetings, handy for trying the UI without recording anything:
+
+```bash
+OATMEAL_SEED_DEMO=1 OATMEAL_STORE_DIR="$(mktemp -d)" \
+  /tmp/OatmealBuild/Build/Products/Debug/Oatmeal.app/Contents/MacOS/Oatmeal
+```
+
+<br/>
+
+## 📄 License
+
+[MIT](LICENSE). Do anything you like; just keep the notice.
+
+<div align="center"><sub>Made for people who want great meeting notes <strong>and</strong> their privacy. 🥣</sub></div>
