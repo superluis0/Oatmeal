@@ -18,7 +18,11 @@ struct MeetingListView: View {
     @Environment(\.modelContext) private var context
 
     private var openTaskCount: Int {
-        meetings.reduce(0) { $0 + $1.openActionItemCount }
+        meetings.reduce(0) { total, meeting in
+            // Skip any meeting that's been deleted out from under the @Query
+            // snapshot — touching its relationships would trap in SwiftData.
+            meeting.modelContext != nil ? total + meeting.openActionItemCount : total
+        }
     }
 
     @State private var showNewFolder = false

@@ -79,15 +79,21 @@ final class Meeting {
     }
 
     var orderedHighlights: [Highlight] {
-        highlights.sorted { $0.time < $1.time }
+        guard modelContext != nil else { return [] }
+        return highlights.filter { $0.modelContext != nil }.sorted { $0.time < $1.time }
     }
 
     var openActionItemCount: Int {
-        actionItems.filter { !$0.isDone }.count
+        // Guard against a deleted/invalidated model: reading a persisted property
+        // (e.g. `isDone`) on a row that's been removed traps inside SwiftData
+        // (SIGTRAP). A deleted model reports a nil `modelContext`.
+        guard modelContext != nil else { return 0 }
+        return actionItems.filter { $0.modelContext != nil && !$0.isDone }.count
     }
 
     var orderedSegments: [TranscriptSegment] {
-        segments.sorted { $0.start < $1.start }
+        guard modelContext != nil else { return [] }
+        return segments.filter { $0.modelContext != nil }.sorted { $0.start < $1.start }
     }
 
     /// Human-friendly duration: "42s", "3m 10s", "1h 5m".
@@ -104,7 +110,8 @@ final class Meeting {
     }
 
     var orderedChatMessages: [ChatMessage] {
-        chatMessages.sorted { $0.createdAt < $1.createdAt }
+        guard modelContext != nil else { return [] }
+        return chatMessages.filter { $0.modelContext != nil }.sorted { $0.createdAt < $1.createdAt }
     }
 
     /// Display name for a diarized speaker label, honoring any user rename.
