@@ -46,12 +46,6 @@ struct WindowConfigurator: NSViewRepresentable {
                     window.center()
                 }
             }
-            // Demo/screenshot mode: park at a fixed rect and publish it for capture.
-            if Demo.isActive {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak window] in
-                    if let window { Demo.parkWindowForCapture(window) }
-                }
-            }
         }
 
         /// Force the sidebar column to a sensible width if a narrow position was restored.

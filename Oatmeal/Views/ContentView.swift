@@ -29,27 +29,6 @@ struct ContentView: View {
         showUpcoming = false; showDigest = false; showDecisions = false
     }
 
-    /// Demo/screenshot mode: jump straight to the requested screen on launch.
-    /// Retries until the seeded @Query has loaded so a meeting is actually present.
-    private func applyDemoRoutingIfNeeded(attempt: Int = 0) {
-        guard Demo.isActive else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (attempt == 0 ? 0.2 : 0.25)) {
-            switch Demo.screen {
-            case "ask": resetDestinations(); showGlobalChat = true
-            case "tasks": resetDestinations(); showTasks = true
-            case "people": resetDestinations(); showPeople = true
-            case "digest": resetDestinations(); showDigest = true
-            case "decisions": resetDestinations(); showDecisions = true
-            case "palette":
-                if let first = meetings.first { selection = first; showPalette = true }
-                else if attempt < 30 { applyDemoRoutingIfNeeded(attempt: attempt + 1) }
-            default: // meeting detail — tab chosen via OATMEAL_DEMO_TAB
-                if let first = meetings.first { selection = first }
-                else if attempt < 30 { applyDemoRoutingIfNeeded(attempt: attempt + 1) }
-            }
-        }
-    }
-
     /// Open the global "Ask Oatmeal" chat with a question prefilled and auto-sent.
     private func ask(_ prompt: String) {
         resetDestinations()
@@ -206,7 +185,6 @@ struct ContentView: View {
                 crashNotice = crash
                 Log.lastCrashReport = nil
             }
-            applyDemoRoutingIfNeeded()
         }
         .onDisappear { detector.stopMonitoring() }
         .alert("Oatmeal quit unexpectedly last time", isPresented: Binding(

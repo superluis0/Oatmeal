@@ -17,13 +17,7 @@ struct OatmealApp: App {
             CustomTemplate.self, Recipe.self, ChatSession.self, EmbeddingChunk.self,
             ActionItem.self, Highlight.self
         ])
-        let config: ModelConfiguration
-        if let demoURL = Demo.storeURL {
-            // Isolated throwaway store for demo/screenshot mode — never the real one.
-            config = ModelConfiguration(schema: schema, url: demoURL)
-        } else {
-            config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-        }
+        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {
             return try ModelContainer(for: schema, configurations: [config])
         } catch {
@@ -73,13 +67,6 @@ struct OatmealApp: App {
         guard !shortcutsRegistered else { return }
         shortcutsRegistered = true
         let container = sharedModelContainer
-
-        // Demo/screenshot mode: seed fictional data into the isolated store and
-        // skip everything that reads real accounts or writes outside the sandbox.
-        if Demo.isActive {
-            Demo.seedIfNeeded(container.mainContext)
-            return
-        }
 
         // Pre-meeting notifications → start recording on tap.
         UNUserNotificationCenter.current().delegate = NotificationCoordinator.shared

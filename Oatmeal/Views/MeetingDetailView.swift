@@ -242,14 +242,6 @@ struct MeetingDetailView: View {
         .accessibilityHidden(true)
     }
 
-    /// The tab to actually render. In demo/screenshot mode this is forced from
-    /// OATMEAL_DEMO_TAB at render time (deterministic, unaffected by @State timing).
-    private var displayTab: DetailTab {
-        if Demo.isActive, let raw = Demo.initialTab,
-           let t = DetailTab(rawValue: raw.capitalized) { return t }
-        return tab
-    }
-
     /// Jump from a note's source quote to that moment in transcript + audio.
     private func jump(to ref: SegmentRef) {
         tab = .transcript
@@ -268,19 +260,15 @@ struct MeetingDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.lg) {
                 titleSection
-                // In demo/screenshot mode, hide the top sections for non-Enhanced
-                // tabs so the selected tab's content sits at the top of the shot.
-                if displayTab == .enhanced || !Demo.isActive {
-                    summarySection
-                    recurringSection
-                    highlightsSection
-                }
-                Picker("View", selection: Demo.isActive ? .constant(displayTab) : $tab) {
+                summarySection
+                recurringSection
+                highlightsSection
+                Picker("View", selection: $tab) {
                     ForEach(DetailTab.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                switch displayTab {
+                switch tab {
                 case .enhanced: enhancedSection
                 case .notes: notesSection
                 case .transcript: transcriptSection
