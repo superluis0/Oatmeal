@@ -117,7 +117,9 @@ Everything runs on your Mac. No cloud. No account. No bots in your meetings.</p>
 - [**XcodeGen**](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
 - [**LM Studio**](https://lmstudio.ai) (or any OpenAI-compatible local server) for the AI features
 
-> The first recording downloads the Parakeet speech model (~450 MB) automatically.
+> **First-run downloads.** The FluidAudio Swift package is fetched automatically when you build.
+> The on-device speech models (Parakeet transcription + speaker-diarization weights, ~450 MB total)
+> download automatically the first time you record. After that, transcription runs fully offline.
 
 ### 1 · Start your local AI
 
@@ -165,6 +167,9 @@ Oatmeal is private by default:
 - Transcription and speaker diarization run **on-device**, so no audio is ever uploaded.
 - LLM features call **only** the local server URL you configure.
 - The optional webhook and MCP mirror are **off / local** unless you turn them on.
+
+The only network activity is a **one-time download of the speech models** on first run, plus the
+calls Oatmeal makes to **your own local LLM**. Your audio and notes are never sent anywhere.
 
 <br/>
 
