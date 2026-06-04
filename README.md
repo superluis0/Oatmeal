@@ -175,22 +175,9 @@ calls Oatmeal makes to **your own local LLM**. Your audio and notes are never se
 
 ## 🏗️ How it works
 
-```
- ┌──────────────┐   mic + system audio    ┌────────────────────┐   text   ┌──────────────────┐
- │  AVAudio      │ ─────────────────────▶ │  FluidAudio         │ ───────▶ │  LM Studio        │
- │  capture      │   (16 kHz, stereo)     │  Parakeet ASR +     │          │  (local, OpenAI-  │
- │  engine       │                        │  diarization        │          │   compatible API) │
- └──────────────┘                         └────────────────────┘          └──────────────────┘
-                                                   │                                  │
-                                                   ▼                                  ▼
-                                          speaker-labeled                  summaries · notes · chat
-                                            transcript        ─────────▶   action items · live assist
-                                                   │                                  │
-                                                   ▼                                  ▼
-                                   ┌───────────────────────────────────────────────────────────┐
-                                   │  SwiftData  +  on-device embeddings (NLEmbedding) for RAG  │
-                                   └───────────────────────────────────────────────────────────┘
-```
+<div align="center">
+  <img src="docs/assets/how-it-works.svg" alt="Architecture: AVAudio capture feeds FluidAudio (Parakeet ASR + diarization) to produce a speaker-labeled transcript, which a local LM Studio model turns into summaries, notes, chat, action items, and live assistance, all persisted in SwiftData with on-device embeddings for RAG." width="100%" />
+</div>
 
 | Path | What |
 |---|---|
