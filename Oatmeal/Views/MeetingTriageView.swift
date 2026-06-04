@@ -97,10 +97,10 @@ struct MeetingTriageView: View {
             .padding(Theme.Space.sm)
             .background(Theme.surfaceAlt, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
 
-            if meeting.actionItems.isEmpty {
+            if meeting.liveActionItems.isEmpty {
                 Text("No action items — add any above, or move on.").foregroundStyle(Theme.textSecondary)
             } else {
-                let sorted = meeting.actionItems.sorted { $0.createdAt < $1.createdAt }
+                let sorted = meeting.liveActionItems.sorted { $0.createdAt < $1.createdAt }
                 VStack(spacing: 0) {
                     ForEach(sorted) { item in
                         ActionItemRow(item: item)
@@ -131,7 +131,7 @@ struct MeetingTriageView: View {
                 Label("Email recap to attendees", systemImage: "envelope").frame(maxWidth: .infinity)
             }
             .buttonStyle(OatPrimaryButton(fullWidth: true))
-            .disabled(meeting.attendees.compactMap(\.email).isEmpty)
+            .disabled(meeting.liveAttendees.compactMap(\.email).isEmpty)
 
             Button {
                 MarkdownExporter.copyToPasteboard(meeting)
@@ -147,7 +147,7 @@ struct MeetingTriageView: View {
             }
             .buttonStyle(OatSecondaryButton())
 
-            if meeting.attendees.compactMap(\.email).isEmpty {
+            if meeting.liveAttendees.compactMap(\.email).isEmpty {
                 Text("No attendee emails on file — add them on the meeting to enable email recap.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
             }

@@ -107,8 +107,8 @@ struct DigestView: View {
     }
 
     private var statsPanel: some View {
-        let open = scoped.reduce(0) { $0 + $1.actionItems.filter { !$0.isDone }.count }
-        let done = scoped.reduce(0) { $0 + $1.actionItems.filter { $0.isDone }.count }
+        let open = scoped.reduce(0) { $0 + $1.openActionItemCount }
+        let done = scoped.reduce(0) { $0 + $1.doneActionItemCount }
         return HStack(spacing: Theme.Space.sm) {
             stat("\(scoped.count)", "meetings")
             stat("\(open)", "open tasks")
@@ -157,7 +157,7 @@ struct DigestView: View {
         Array(Set(meetings.flatMap { $0.tags })).sorted()
     }
     private var allPeople: [String] {
-        Array(Set(meetings.flatMap { $0.attendees.map { $0.name } })).sorted()
+        Array(Set(meetings.flatMap { $0.attendeeNames })).sorted()
     }
 
     private var scoped: [Meeting] {
@@ -172,7 +172,7 @@ struct DigestView: View {
         case .tag:
             return tagName.isEmpty ? [] : meetings.filter { $0.tags.contains(tagName) }
         case .person:
-            return personName.isEmpty ? [] : meetings.filter { $0.attendees.contains { $0.name == personName } }
+            return personName.isEmpty ? [] : meetings.filter { $0.attendeeNames.contains(personName) }
         }
     }
 
@@ -196,7 +196,7 @@ struct DigestView: View {
                 id: tag(m),
                 title: m.title,
                 date: m.date.formatted(date: .abbreviated, time: .shortened),
-                notes: m.enhancedNotes.isEmpty ? (m.summary?.text ?? m.notes) : m.enhancedNotes,
+                notes: m.enhancedNotes.isEmpty ? (m.liveSummary?.text ?? m.notes) : m.enhancedNotes,
                 transcript: m.transcriptText
             )
         }

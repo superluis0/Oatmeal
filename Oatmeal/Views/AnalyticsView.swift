@@ -111,7 +111,7 @@ struct AnalyticsView: View {
     }
 
     private var notes: String {
-        meeting.enhancedNotes.isEmpty ? (meeting.summary?.text ?? meeting.notes) : meeting.enhancedNotes
+        meeting.enhancedNotes.isEmpty ? (meeting.liveSummary?.text ?? meeting.notes) : meeting.enhancedNotes
     }
 
     private func run(_ op: @escaping () async throws -> String) async {

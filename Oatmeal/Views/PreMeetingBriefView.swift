@@ -27,7 +27,7 @@ struct PreMeetingBriefView: View {
         let priorIDs = Set(priorOccurrences.map(\.id))
         return pastMeetings.filter { m in
             m.date < .now && !priorIDs.contains(m.id)
-                && m.attendees.contains { attendeeNames.contains(norm($0.name)) }
+                && m.attendeeNames.contains { attendeeNames.contains(norm($0)) }
         }
     }
 
@@ -38,7 +38,7 @@ struct PreMeetingBriefView: View {
         // the brief.
         let relevant = priorOccurrences + relatedByPeople
         var items: [ActionItem] = relevant.flatMap { meeting in
-            meeting.actionItems.filter { item in
+            meeting.liveActionItems.filter { item in
                 !item.isDone
                     && (priorOccurrences.contains { $0.id == meeting.id }
                         || (item.owner.map { attendeeNames.contains(norm($0)) } ?? false))
@@ -103,7 +103,7 @@ struct PreMeetingBriefView: View {
     private func lastTimeSection(_ prior: Meeting) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             SectionLabel(text: "Last time (\(prior.date.formatted(date: .abbreviated, time: .omitted)))")
-            if let summary = prior.summary, !summary.text.isEmpty {
+            if let summary = prior.liveSummary, !summary.text.isEmpty {
                 MarkdownView(markdown: String(summary.text.prefix(600)))
             } else {
                 Text("No summary recorded.").font(.caption).foregroundStyle(Theme.textSecondary)

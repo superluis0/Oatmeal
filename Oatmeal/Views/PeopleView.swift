@@ -20,7 +20,7 @@ struct PeopleView: View {
     private var people: [Person] {
         var map: [String: Person] = [:]
         for m in meetings {
-            for a in m.attendees {
+            for a in m.liveAttendees {
                 let key = a.name.lowercased()
                 if map[key] == nil {
                     map[key] = Person(id: key, name: a.name, email: a.email, meetingIDs: [])
@@ -87,8 +87,8 @@ struct PersonPage: View {
 
     private var commitments: [ActionItem] {
         let name = person.name.lowercased()
-        var items = meetings.flatMap { $0.actionItems }.filter { !$0.isDone }
-        items += allMeetings.flatMap { $0.actionItems }
+        var items = meetings.flatMap { $0.liveActionItems }.filter { !$0.isDone }
+        items += allMeetings.flatMap { $0.liveActionItems }
             .filter { !$0.isDone && ($0.owner?.lowercased() == name) }
         var seen = Set<PersistentIdentifier>()
         return items.filter { seen.insert($0.persistentModelID).inserted }

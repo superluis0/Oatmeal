@@ -91,7 +91,7 @@ struct DecisionsView: View {
                 id: String(m.id.uuidString.prefix(MeetingCitations.tagLength)).lowercased(),
                 title: m.title,
                 date: m.date.formatted(date: .abbreviated, time: .shortened),
-                notes: m.enhancedNotes.isEmpty ? (m.summary?.text ?? m.notes) : m.enhancedNotes,
+                notes: m.enhancedNotes.isEmpty ? (m.liveSummary?.text ?? m.notes) : m.enhancedNotes,
                 transcript: m.transcriptText
             )
         }

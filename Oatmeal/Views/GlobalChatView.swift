@@ -210,7 +210,7 @@ struct GlobalChatView: View {
         var parts: [String] = []
         for (i, m) in sorted.enumerated() {
             let tag = String(m.id.uuidString.prefix(MeetingCitations.tagLength)).lowercased()
-            let notes = m.enhancedNotes.isEmpty ? (m.summary?.text ?? "") : m.enhancedNotes
+            let notes = m.enhancedNotes.isEmpty ? (m.liveSummary?.text ?? "") : m.enhancedNotes
             var block = "[#\(tag) \(m.title)] (\(m.date.formatted(date: .abbreviated, time: .shortened)))\nNotes: \(notes.prefix(800))"
             if i < recentTranscriptCount {
                 block += "\nTranscript: \(truncateTranscript(m.transcriptText, maxChars: 3_000))"

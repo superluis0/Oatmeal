@@ -384,7 +384,7 @@ struct MeetingDetailView: View {
             RecipeResultView(
                 text: recipeResult ?? "",
                 isEmail: recipeIsEmail,
-                recipientEmails: meeting.attendees.compactMap(\.email),
+                recipientEmails: meeting.liveAttendees.compactMap(\.email),
                 onInsert: { insertIntoNotes(recipeResult ?? "") }
             )
         }
@@ -429,7 +429,7 @@ struct MeetingDetailView: View {
                     let ok = CalendarService().createFollowUp(
                         title: meeting.title,
                         date: followUpDate,
-                        notes: meeting.summary?.text ?? meeting.enhancedNotes
+                        notes: meeting.liveSummary?.text ?? meeting.enhancedNotes
                     )
                     showFollowUpSheet = false
                     showToast(ok ? "Follow-up added to your calendar" : "Couldn't create event (check Calendar access)")
@@ -446,7 +446,7 @@ struct MeetingDetailView: View {
         defer { reextracting = false }
         let notes = meeting.enhancedNotes.isEmpty ? meeting.notes : meeting.enhancedNotes
         let extracted = await ActionItemExtractor().extract(transcript: meeting.transcriptText, notes: notes)
-        let existing = Set(meeting.actionItems.map { $0.text.lowercased() })
+        let existing = Set(meeting.liveActionItems.map { $0.text.lowercased() })
         var added = 0
         for action in extracted where !existing.contains(action.text.lowercased()) {
             let item = ActionItem(text: action.text, dueDate: action.dueDate, owner: action.owner)
@@ -481,8 +481,8 @@ struct MeetingDetailView: View {
             }
             .font(.system(.subheadline))
             .foregroundStyle(.secondary)
-            if !meeting.attendees.isEmpty {
-                Label(meeting.attendees.map(\.name).joined(separator: ", "),
+            if !meeting.liveAttendees.isEmpty {
+                Label(meeting.attendeeNames.joined(separator: ", "),
                       systemImage: "person.2")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -540,10 +540,10 @@ struct MeetingDetailView: View {
                     if !summary.keyPoints.isEmpty {
                         bulletList(title: "Key Points", items: summary.keyPoints)
                     }
-                    if !meeting.actionItems.isEmpty {
+                    if !meeting.liveActionItems.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Action Items").font(.headline)
-                            ForEach(meeting.actionItems.sorted { !$0.isDone && $1.isDone }) { item in
+                            ForEach(meeting.liveActionItems.sorted { !$0.isDone && $1.isDone }) { item in
                                 ActionItemRow(item: item)
                             }
                         }
@@ -618,7 +618,7 @@ struct MeetingDetailView: View {
                 id: String(m.id.uuidString.prefix(4)).lowercased(),
                 title: m.title,
                 date: m.date.formatted(date: .abbreviated, time: .shortened),
-                notes: m.enhancedNotes.isEmpty ? (m.summary?.text ?? m.notes) : m.enhancedNotes,
+                notes: m.enhancedNotes.isEmpty ? (m.liveSummary?.text ?? m.notes) : m.enhancedNotes,
                 transcript: m.transcriptText
             )
         }
@@ -754,7 +754,7 @@ struct MeetingDetailView: View {
         runningRecipe = true
         defer { runningRecipe = false }
         recipeIsEmail = recipe.isEmail
-        let notes = meeting.enhancedNotes.isEmpty ? (meeting.summary?.text ?? "") : meeting.enhancedNotes
+        let notes = meeting.enhancedNotes.isEmpty ? (meeting.liveSummary?.text ?? "") : meeting.enhancedNotes
         do {
             recipeResult = try await RecipeService().run(
                 prompt: recipe.prompt,
@@ -930,9 +930,9 @@ struct MeetingDetailView: View {
                         Text(original).font(.caption).foregroundStyle(.secondary).frame(width: 90, alignment: .leading)
                         TextField(original, text: speakerNameBinding(original))
                             .textFieldStyle(.roundedBorder)
-                        if !meeting.attendees.isEmpty {
+                        if !meeting.liveAttendees.isEmpty {
                             Menu {
-                                ForEach(meeting.attendees) { a in
+                                ForEach(meeting.liveAttendees) { a in
                                     Button(a.name) {
                                         meeting.speakerNames[original] = a.name
                                         try? context.save()
@@ -977,7 +977,7 @@ struct MeetingDetailView: View {
     /// Reassigns every segment of `from` to `target` and reindexes — making the
     /// merge structural (the transcript, summaries, and chat all see one speaker).
     private func mergeSpeaker(_ from: String, into target: String) {
-        for seg in meeting.segments where seg.speaker == from { seg.speaker = target }
+        for seg in meeting.orderedSegments where seg.speaker == from { seg.speaker = target }
         meeting.speakerNames[from] = nil
         try? context.save()
         SemanticIndex(context: context).reindex(meeting)

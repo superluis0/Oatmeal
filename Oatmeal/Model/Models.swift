@@ -1,6 +1,18 @@
 import Foundation
 import SwiftData
 
+// MARK: - Deleted-object safety
+
+extension PersistentModel {
+    /// A SwiftData model that has been deleted or invalidated reports a nil
+    /// `modelContext`. Reading ANY persisted property on such an instance traps
+    /// inside SwiftData (an uncatchable SIGTRAP), so always check this before
+    /// touching a model that may have been deleted out from under a live view —
+    /// especially one reached by traversing a relationship, since the top-level
+    /// `@Query` prunes deletions but related objects don't update in lockstep.
+    var isAlive: Bool { modelContext != nil }
+}
+
 @Model
 final class Meeting {
     var id: UUID
@@ -79,21 +91,38 @@ final class Meeting {
     }
 
     var orderedHighlights: [Highlight] {
-        guard modelContext != nil else { return [] }
-        return highlights.filter { $0.modelContext != nil }.sorted { $0.time < $1.time }
+        guard isAlive else { return [] }
+        return highlights.filter(\.isAlive).sorted { $0.time < $1.time }
     }
 
-    var openActionItemCount: Int {
-        // Guard against a deleted/invalidated model: reading a persisted property
-        // (e.g. `isDone`) on a row that's been removed traps inside SwiftData
-        // (SIGTRAP). A deleted model reports a nil `modelContext`.
-        guard modelContext != nil else { return 0 }
-        return actionItems.filter { $0.modelContext != nil && !$0.isDone }.count
+    /// Action items that are still live (not deleted). All relationship-reading
+    /// helpers funnel through this so no caller ever reads a property on a
+    /// removed child (which would trap inside SwiftData).
+    var liveActionItems: [ActionItem] {
+        guard isAlive else { return [] }
+        return actionItems.filter(\.isAlive)
+    }
+
+    var openActionItemCount: Int { liveActionItems.filter { !$0.isDone }.count }
+    var doneActionItemCount: Int { liveActionItems.filter { $0.isDone }.count }
+
+    /// Attendees that are still live.
+    var liveAttendees: [Attendee] {
+        guard isAlive else { return [] }
+        return attendees.filter(\.isAlive)
+    }
+
+    var attendeeNames: [String] { liveAttendees.map(\.name) }
+
+    /// The summary, but only when both it and this meeting are still live.
+    var liveSummary: Summary? {
+        guard isAlive, let s = summary, s.isAlive else { return nil }
+        return s
     }
 
     var orderedSegments: [TranscriptSegment] {
-        guard modelContext != nil else { return [] }
-        return segments.filter { $0.modelContext != nil }.sorted { $0.start < $1.start }
+        guard isAlive else { return [] }
+        return segments.filter(\.isAlive).sorted { $0.start < $1.start }
     }
 
     /// Human-friendly duration: "42s", "3m 10s", "1h 5m".
@@ -110,8 +139,8 @@ final class Meeting {
     }
 
     var orderedChatMessages: [ChatMessage] {
-        guard modelContext != nil else { return [] }
-        return chatMessages.filter { $0.modelContext != nil }.sorted { $0.createdAt < $1.createdAt }
+        guard isAlive else { return [] }
+        return chatMessages.filter(\.isAlive).sorted { $0.createdAt < $1.createdAt }
     }
 
     /// Display name for a diarized speaker label, honoring any user rename.
@@ -258,7 +287,8 @@ final class ChatSession {
     }
 
     var orderedMessages: [ChatMessage] {
-        messages.sorted { $0.createdAt < $1.createdAt }
+        guard isAlive else { return [] }
+        return messages.filter(\.isAlive).sorted { $0.createdAt < $1.createdAt }
     }
 }
 

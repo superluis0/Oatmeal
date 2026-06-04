@@ -156,7 +156,7 @@ struct ActionItemRow: View {
                     .foregroundStyle(item.isDone ? Theme.textSecondary : Theme.textPrimary)
                     .strikethrough(item.isDone, color: Theme.textTertiary)
                 metadata
-                if showSource, let meeting = item.meeting {
+                if showSource, let meeting = item.meeting, meeting.isAlive {
                     Button { onOpenMeeting?(meeting) } label: {
                         Label(meeting.title, systemImage: "waveform")
                             .font(.caption).foregroundStyle(Theme.accent).lineLimit(1)
@@ -205,7 +205,7 @@ struct ActionItemRow: View {
                 Button("Until next week") { snooze(TaskDates.nextWeek) }
                 if item.snoozedUntil != nil { Divider(); Button("Unsnooze") { snooze(nil) } }
             }
-            if let attendees = item.meeting?.attendees, !attendees.isEmpty {
+            if let attendees = item.meeting?.liveAttendees, !attendees.isEmpty {
                 Menu("Owner") {
                     ForEach(attendees) { a in
                         Button(a.name) { item.owner = a.name; try? context.save() }
