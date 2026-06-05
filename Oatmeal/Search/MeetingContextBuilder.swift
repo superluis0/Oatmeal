@@ -34,16 +34,20 @@ enum MeetingContextBuilder {
     ) -> String {
         var parts: [String] = []
 
+        // Identity grounding so chat never confuses "Me" (the note-taker) with the
+        // other participants or invents affiliations.
+        parts.append(MeetingIdentity.preamble(knownSpeakers: meeting.speakerNames))
+
         // Always include the distilled notes + key points for high-level grounding.
-        let notes = meeting.enhancedNotes.isEmpty ? (meeting.summary?.text ?? "") : meeting.enhancedNotes
+        let notes = meeting.enhancedNotes.isEmpty ? (meeting.liveSummary?.text ?? "") : meeting.enhancedNotes
         if !notes.isEmpty {
             parts.append("NOTES:\n\(notes.prefix(2_400))")
         }
-        if let keyPoints = meeting.summary?.keyPoints, !keyPoints.isEmpty {
+        if let keyPoints = meeting.liveSummary?.keyPoints, !keyPoints.isEmpty {
             parts.append("KEY POINTS:\n" + keyPoints.map { "- \($0)" }.joined(separator: "\n"))
         }
 
-        let transcript = meeting.transcriptText
+        let transcript = MeetingIdentity.ground(transcript: meeting.transcriptText, userName: AppSettings.userName)
         if transcript.isEmpty {
             let ctx = parts.joined(separator: "\n\n")
             debugDump(question: question, keywords: [], info: "notes-only (no transcript)", context: ctx)
@@ -103,7 +107,9 @@ enum MeetingContextBuilder {
 
             // Read in transcript order so excerpts are coherent.
             let ordered = picked.sorted { $0.createdAt < $1.createdAt }
-            let body = ordered.map { $0.text }.joined(separator: "\n…\n")
+            let body = MeetingIdentity.ground(
+                transcript: ordered.map { $0.text }.joined(separator: "\n…\n"),
+                userName: AppSettings.userName)
             parts.append("RELEVANT TRANSCRIPT EXCERPTS:\n\(body)")
             parts.append("MEETING OPENING:\n\(String(transcript.prefix(2_000)))")
             infoNote = "hybrid retrieval (\(ordered.count)/\(transcriptChunks.count) chunks, \(lexicalHits.count) lexical hits, \(used) chars)"
@@ -113,9 +119,11 @@ enum MeetingContextBuilder {
         }
 
         // Always include the final exchange so "what did we just decide / say" works.
-        let tail = meeting.orderedSegments.suffix(8)
-            .map { "\(meeting.displayName(for: $0.speaker)): \($0.text)" }
-            .joined(separator: "\n")
+        let tail = MeetingIdentity.ground(
+            transcript: meeting.orderedSegments.suffix(8)
+                .map { "\(meeting.displayName(for: $0.speaker)): \($0.text)" }
+                .joined(separator: "\n"),
+            userName: AppSettings.userName)
         if !tail.isEmpty {
             parts.append("MOST RECENT EXCHANGE:\n\(tail)")
         }

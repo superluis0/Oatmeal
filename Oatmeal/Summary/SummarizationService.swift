@@ -10,7 +10,7 @@ struct MeetingSummary: Sendable {
 struct SummarizationService {
     private let client = LMStudioClient()
 
-    func summarize(transcript: String, title: String? = nil, attendees: [String] = []) async throws -> MeetingSummary {
+    func summarize(transcript: String, title: String? = nil, attendees: [String] = [], identity: String = "") async throws -> MeetingSummary {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return MeetingSummary(text: "No speech was transcribed for this meeting.", actionItems: [], keyPoints: [])
@@ -19,12 +19,12 @@ struct SummarizationService {
         // Long meetings: map-reduce so the middle of the conversation isn't lost
         // to truncation (the #1 cause of bland, start/end-only summaries).
         if trimmed.count > 14_000 {
-            return try await summarizeLong(trimmed, title: title, attendees: attendees)
+            return try await summarizeLong(trimmed, title: title, attendees: attendees, identity: identity)
         }
 
         let user = "Meeting transcript (speaker-labeled):\n\n\(truncateTranscript(trimmed))"
         let content = try await client.chat(
-            messages: [.system(systemPrompt(title: title, attendees: attendees)), .user(user)],
+            messages: [.system(systemPrompt(title: title, attendees: attendees, identity: identity)), .user(user)],
             temperature: 0.45
         )
         return parse(content)
@@ -32,14 +32,17 @@ struct SummarizationService {
 
     // MARK: - Prompt
 
-    private func systemPrompt(title: String?, attendees: [String]) -> String {
+    private func systemPrompt(title: String?, attendees: [String], identity: String) -> String {
         var context = ""
         if let title, !title.isEmpty { context += "Meeting title: \(title)\n" }
-        if !attendees.isEmpty { context += "Attendees: \(attendees.joined(separator: ", "))\n" }
+        if !attendees.isEmpty {
+            context += "Calendar attendees (the expected participants — this list may include the note-taker and people who never spoke; do not map these names to speakers): \(attendees.joined(separator: ", "))\n"
+        }
+        let identityBlock = identity.isEmpty ? "" : "\n\(identity)\n"
         return """
         You are an expert meeting-notes analyst. Write specific, information-dense notes
         that someone who missed the meeting could fully rely on.
-        \(context.isEmpty ? "" : "\n\(context)")
+        \(context.isEmpty ? "" : "\n\(context)")\(identityBlock)
         Respond with ONLY a JSON object of the form:
         {"summary": "<a substantive overview: what the meeting was about, the concrete \
         decisions reached, key numbers/dates/names, any disagreements, and what is still \
@@ -53,7 +56,7 @@ struct SummarizationService {
 
     // MARK: - Map-reduce for long transcripts
 
-    private func summarizeLong(_ transcript: String, title: String?, attendees: [String]) async throws -> MeetingSummary {
+    private func summarizeLong(_ transcript: String, title: String?, attendees: [String], identity: String) async throws -> MeetingSummary {
         // Cover the WHOLE transcript in ≤8 ordered windows.
         let targetWindows = min(8, max(2, transcript.count / 6_000))
         let windowSize = Int((Double(transcript.count) / Double(targetWindows)).rounded(.up))
@@ -74,7 +77,7 @@ struct SummarizationService {
             // Couldn't map — fall back to a single bounded pass.
             let user = "Meeting transcript (speaker-labeled):\n\n\(truncateTranscript(transcript))"
             let content = try await client.chat(
-                messages: [.system(systemPrompt(title: title, attendees: attendees)), .user(user)],
+                messages: [.system(systemPrompt(title: title, attendees: attendees, identity: identity)), .user(user)],
                 temperature: 0.45)
             return parse(content)
         }
@@ -87,7 +90,7 @@ struct SummarizationService {
         \(combined)
         """
         let content = try await client.chat(
-            messages: [.system(systemPrompt(title: title, attendees: attendees)), .user(user)],
+            messages: [.system(systemPrompt(title: title, attendees: attendees, identity: identity)), .user(user)],
             temperature: 0.45)
         return parse(content)
     }

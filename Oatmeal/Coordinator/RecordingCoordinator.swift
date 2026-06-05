@@ -27,6 +27,10 @@ final class RecordingCoordinator {
     var isSuggesting = false
     /// Non-fatal warning (e.g. system audio unavailable) shown during recording.
     var captureWarning: String?
+    /// Set just before a meeting is deleted out from under the UI (e.g. discarding
+    /// an empty failed recording), so the view layer can drop it from `selection`
+    /// before the model is invalidated and a layout pass reads a dead object.
+    var lastDiscardedMeetingID: PersistentIdentifier?
 
     private let engine = AudioCaptureEngine()
     private let transcription = TranscriptionService()
@@ -59,7 +63,7 @@ final class RecordingCoordinator {
 
     // MARK: - Start
 
-    func start(context: ModelContext) async {
+    func start(context: ModelContext, event: UpcomingMeeting? = nil) async {
         guard phase == .idle else { return }
         Log.info("recording start requested", "recording")
         liveSegments = []
@@ -111,7 +115,14 @@ final class RecordingCoordinator {
 
         let meeting = Meeting(title: defaultTitle())
         context.insert(meeting)
-        await seedFromCalendar(meeting, context: context)
+        if let event {
+            // The user picked a specific calendar meeting — seed from THAT one,
+            // not whichever event the calendar thinks is "current" (which is wrong
+            // when meetings overlap).
+            seed(from: event, into: meeting, context: context)
+        } else {
+            await seedFromCalendar(meeting, context: context)
+        }
         activeMeeting = meeting
 
         startDate = Date()
@@ -164,6 +175,8 @@ final class RecordingCoordinator {
             // typed notes — leaving it behind creates a broken half-meeting.
             if meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && meeting.segments.isEmpty {
+                // Signal the UI to drop this from `selection` BEFORE we invalidate it.
+                lastDiscardedMeetingID = meeting.persistentModelID
                 context.delete(meeting)
                 SafeStore.save(context, "discard-empty-meeting")
             }
@@ -194,14 +207,19 @@ final class RecordingCoordinator {
     /// Summary + note enhancement + persist + semantic reindex. Returns false (and
     /// leaves `phase` in `.error`) if summarization fails; the transcript is kept.
     private func summarizeAndEnhance(meeting: Meeting, context: ModelContext) async -> Bool {
-        let transcript = meeting.transcriptText
+        // Ground the transcript + prompts in WHO is speaking, so the AI doesn't
+        // confuse the note-taker ("Me") with the other participants or invent
+        // affiliations.
+        let identity = MeetingIdentity.preamble(knownSpeakers: meeting.speakerNames)
+        let transcript = MeetingIdentity.ground(transcript: meeting.transcriptText, userName: AppSettings.userName)
 
         phase = .processing("Generating summary with LM Studio…")
         do {
             let result = try await SummarizationService().summarize(
                 transcript: transcript,
                 title: meeting.title,
-                attendees: meeting.attendees.map(\.name)
+                attendees: meeting.attendeeNames,
+                identity: identity
             )
             let summary = Summary(text: result.text, actionItems: result.actionItems, keyPoints: result.keyPoints)
             context.insert(summary)
@@ -219,7 +237,7 @@ final class RecordingCoordinator {
         let template = await resolveTemplate(for: meeting, transcript: transcript, context: context)
         meeting.templateName = template.name
         if let result = try? await NoteEnhancementService()
-            .enhance(rawNotes: meeting.notes, transcript: transcript, template: template) {
+            .enhance(rawNotes: meeting.notes, transcript: transcript, template: template, identity: identity) {
             meeting.enhancedNotes = result.markdown
             meeting.noteBlocks = result.blocks
         }
@@ -476,6 +494,19 @@ final class RecordingCoordinator {
         }
     }
 
+    /// Seeds a new recording from a specific upcoming meeting the user chose
+    /// (title, calendar id, attendees) — no calendar re-pick, so overlapping
+    /// meetings can't cause the wrong one to be attached.
+    private func seed(from event: UpcomingMeeting, into meeting: Meeting, context: ModelContext) {
+        meeting.title = event.title
+        meeting.calendarEventID = event.id
+        for name in event.attendees {
+            let attendee = Attendee(name: name)
+            context.insert(attendee)
+            attendee.meeting = meeting
+        }
+    }
+
     private func defaultTitle() -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM d, h:mm a"
@@ -563,6 +594,39 @@ final class RecordingCoordinator {
         try? context.save()
         SemanticIndex(context: context).reindex(meeting)
         phase = .idle
+    }
+
+    /// Re-runs the summary on a finished meeting using the current identity
+    /// settings (your name / role). Use after filling in "Your name" in Settings,
+    /// or any time the summary got the speakers wrong. Leaves your edited notes
+    /// untouched — only the Summary (overview, key points, action items) is redone.
+    func regenerateSummary(for meeting: Meeting, context: ModelContext) async {
+        guard phase == .idle, meeting.modelContext != nil else { return }
+        let raw = meeting.transcriptText
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            phase = .error("There's no transcript to summarize for this meeting.")
+            return
+        }
+        let identity = MeetingIdentity.preamble(knownSpeakers: meeting.speakerNames)
+        let transcript = MeetingIdentity.ground(transcript: raw, userName: AppSettings.userName)
+
+        phase = .processing("Regenerating summary…")
+        do {
+            let result = try await SummarizationService().summarize(
+                transcript: transcript, title: meeting.title,
+                attendees: meeting.attendeeNames, identity: identity)
+            guard meeting.modelContext != nil else { phase = .idle; return }
+            if let old = meeting.summary { context.delete(old) }
+            let summary = Summary(text: result.text, actionItems: result.actionItems, keyPoints: result.keyPoints)
+            context.insert(summary)
+            meeting.summary = summary
+            SafeStore.save(context, "resummarize")
+            SemanticIndex(context: context).reindex(meeting)
+            StoreBackup.snapshot(context: context)
+            phase = .idle
+        } catch {
+            phase = .error("Couldn't regenerate the summary: \(error.localizedDescription)")
+        }
     }
 
     func dismissError() {

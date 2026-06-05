@@ -8,16 +8,21 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     static let startActionID = "START_RECORDING"
     static let categoryID = "PRE_MEETING"
 
-    /// Set by the app; invoked when the user taps "Start Recording".
-    var onStartRecording: (() -> Void)?
+    /// Set by the app; invoked when the user taps "Start Recording". The argument
+    /// is the calendar event id this reminder was for (nil if it can't be parsed),
+    /// so the app records THAT meeting rather than re-picking from overlaps.
+    var onStartRecording: ((String?) -> Void)?
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                didReceive response: UNNotificationResponse,
                                withCompletionHandler completionHandler: @escaping () -> Void) {
         if response.actionIdentifier == Self.startActionID || response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+            // Request ids are created as "oatmeal-<eventID>" (see scheduling below).
+            let requestID = response.notification.request.identifier
+            let eventID = requestID.hasPrefix("oatmeal-") ? String(requestID.dropFirst("oatmeal-".count)) : nil
             DispatchQueue.main.async {
                 NSApp.activate(ignoringOtherApps: true)
-                self.onStartRecording?()
+                self.onStartRecording?(eventID)
             }
         }
         completionHandler()

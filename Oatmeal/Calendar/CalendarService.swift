@@ -117,6 +117,22 @@ final class CalendarService {
             }
     }
 
+    /// Looks up a single event by its stable identifier and maps it to an
+    /// `UpcomingMeeting`, so a specific meeting (e.g. from a pre-meeting reminder)
+    /// can be recorded directly rather than re-picked from overlapping events.
+    func upcomingMeeting(withID id: String) -> UpcomingMeeting? {
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess,
+              let event = store.event(withIdentifier: id) else { return nil }
+        return UpcomingMeeting(
+            id: event.eventIdentifier ?? id,
+            title: event.title ?? "Meeting",
+            start: event.startDate,
+            end: event.endDate,
+            attendees: (event.attendees ?? []).compactMap { $0.name },
+            joinURL: meetingURL(event)
+        )
+    }
+
     /// A timed event (not all-day), excluding birthdays/holidays and anything
     /// canceled or declined. When `videoOnly`, also require a recognized
     /// video-conferencing / scheduling link.

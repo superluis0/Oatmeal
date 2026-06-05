@@ -16,6 +16,7 @@ struct MeetingListView: View {
     var onDigest: () -> Void
     var onDecisions: () -> Void = {}
     @Environment(\.modelContext) private var context
+    @State private var updateChecker = UpdateChecker.shared
 
     private var openTaskCount: Int {
         meetings.reduce(0) { total, meeting in
@@ -150,6 +151,17 @@ struct MeetingListView: View {
                 .font(.system(.title3).weight(.bold))
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
+            if let update = updateChecker.available {
+                Link(destination: update.url) {
+                    Label("Update", systemImage: "arrow.down.circle.fill")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Theme.accentSoft, in: Capsule())
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .help("Oatmeal \(update.version) is available — view the release")
+            }
         }
         .padding(.horizontal, Theme.Space.md)
         .padding(.top, Theme.Space.sm)

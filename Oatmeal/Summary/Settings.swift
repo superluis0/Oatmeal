@@ -18,8 +18,31 @@ enum AppSettings {
     private static let liveAssistEnabledKey = "liveAssistEnabled"
     private static let assistProfileKey = "assistProfile"
     private static let floatingPanelAutoKey = "floatingPanelAuto"
+    private static let userNameKey = "userName"
+    private static let userTaglineKey = "userTagline"
+    private static let checkForUpdatesKey = "checkForUpdates"
+
+    /// Whether to check the GitHub repo for a newer release (~once/day). Default on.
+    static var checkForUpdates: Bool {
+        get { (UserDefaults.standard.object(forKey: checkForUpdatesKey) as? Bool) ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: checkForUpdatesKey) }
+    }
 
     static let defaultBaseURL = "http://127.0.0.1:1234"
+
+    /// The user's own name, so the AI knows who the "Me" speaker is and never
+    /// confuses the note-taker with the other participants.
+    static var userName: String {
+        get { UserDefaults.standard.string(forKey: userNameKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: userNameKey) }
+    }
+
+    /// Optional one-line role / company for the user (e.g. "PM at Acme"), used to
+    /// ground affiliations correctly in summaries and chat.
+    static var userTagline: String {
+        get { UserDefaults.standard.string(forKey: userTaglineKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: userTaglineKey) }
+    }
 
     static var baseURL: String {
         get { UserDefaults.standard.string(forKey: baseURLKey) ?? defaultBaseURL }

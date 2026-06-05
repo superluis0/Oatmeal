@@ -168,8 +168,9 @@ Oatmeal is private by default:
 - LLM features call **only** the local server URL you configure.
 - The optional webhook and MCP mirror are **off / local** unless you turn them on.
 
-The only network activity is a **one-time download of the speech models** on first run, plus the
-calls Oatmeal makes to **your own local LLM**. Your audio and notes are never sent anywhere.
+The only network activity is a **one-time download of the speech models** on first run, the calls
+Oatmeal makes to **your own local LLM**, and an optional **once-a-day update check** against the
+GitHub releases API (toggle in Settings → Updates). Your audio and notes are never sent anywhere.
 
 <br/>
 

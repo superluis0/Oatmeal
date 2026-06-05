@@ -11,16 +11,18 @@ struct EnhancementResult: Sendable {
 struct NoteEnhancementService {
     private let client = LMStudioClient()
 
-    func enhance(rawNotes: String, transcript: String, template: NoteTemplate) async throws -> EnhancementResult {
+    func enhance(rawNotes: String, transcript: String, template: NoteTemplate, identity: String = "") async throws -> EnhancementResult {
         let trimmedTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTranscript.isEmpty else {
             return EnhancementResult(markdown: rawNotes, blocks: blocks(fromUserText: rawNotes))
         }
 
+        let identityBlock = identity.isEmpty ? "" : "\n\(identity)\n"
         let system = """
         You are an expert meeting-notes assistant. \(template.systemPrompt)
         You are given the user's own rough notes and the full meeting transcript.
         Rewrite the notes into clean, well-structured GitHub-flavored Markdown.
+        \(identityBlock)
         Rules:
         - Preserve the user's intent and any points they emphasized.
         - Use the transcript only to fill in, correct, and add factual detail — never invent facts not supported by the transcript or notes.

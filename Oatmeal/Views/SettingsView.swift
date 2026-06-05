@@ -21,6 +21,10 @@ struct SettingsView: View {
     @State private var liveAssist: Bool = AppSettings.liveAssistEnabled
     @State private var assistProfile: String = AppSettings.assistProfile
     @State private var floatingPanelAuto: Bool = AppSettings.floatingPanelAuto
+    @State private var userName: String = AppSettings.userName
+    @State private var userTagline: String = AppSettings.userTagline
+    @State private var checkForUpdates: Bool = AppSettings.checkForUpdates
+    @State private var updateChecker = UpdateChecker.shared
     @State private var backupConfirmed = false
     @Bindable private var appearance = Appearance.shared
     @Environment(\.modelContext) private var modelContext
@@ -28,6 +32,14 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("You") {
+                TextField("Your name", text: $userName, prompt: Text("e.g. Alex Rivera"))
+                    .onChange(of: userName) { _, new in AppSettings.userName = new }
+                TextField("Your role / company (optional)", text: $userTagline, prompt: Text("e.g. PM at Acme"))
+                    .onChange(of: userTagline) { _, new in AppSettings.userTagline = new }
+                Text("Used so summaries and chat know which speaker is you (\u{201C}Me\u{201D}) and never mix you up with the other participants. Stored locally.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Appearance") {
                 Picker("Theme", selection: $appearance.colorSchemePreference) {
                     ForEach(ColorSchemePreference.allCases) { Text($0.label).tag($0) }
@@ -265,6 +277,37 @@ struct SettingsView: View {
                 TextField("Webhook URL", text: $webhookURL, prompt: Text("https://hooks.slack.com/…"))
                     .onChange(of: webhookURL) { _, new in AppSettings.webhookURL = new }
                 Text("When set, Oatmeal POSTs each finished meeting's summary + action items to this URL (Slack-compatible). Leave empty to keep everything local.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Updates") {
+                LabeledContent("Current version", value: updateChecker.currentVersion)
+                Toggle("Check GitHub for new releases", isOn: $checkForUpdates)
+                    .onChange(of: checkForUpdates) { _, new in
+                        AppSettings.checkForUpdates = new
+                        if new { Task { await updateChecker.check() } }
+                    }
+                if let update = updateChecker.available {
+                    HStack {
+                        Label("Version \(update.version) is available", systemImage: "arrow.down.circle.fill")
+                            .foregroundStyle(Theme.accent)
+                        Spacer()
+                        Link("View release", destination: update.url)
+                    }
+                } else {
+                    HStack {
+                        Button {
+                            Task { await updateChecker.check() }
+                        } label: {
+                            Label(updateChecker.isChecking ? "Checking…" : "Check now", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(updateChecker.isChecking)
+                        Spacer()
+                        Text("You're up to date").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Text("Contacts api.github.com at most once a day to compare the latest release tag with your version. No data about you is sent. Turn off to keep Oatmeal fully offline.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

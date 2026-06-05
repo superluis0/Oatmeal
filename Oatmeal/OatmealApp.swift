@@ -68,10 +68,15 @@ struct OatmealApp: App {
         shortcutsRegistered = true
         let container = sharedModelContainer
 
-        // Pre-meeting notifications → start recording on tap.
+        // Pre-meeting notifications → start recording on tap. Record the SPECIFIC
+        // meeting the reminder was for (resolved from its event id), not whichever
+        // event the calendar would auto-pick when meetings overlap.
         UNUserNotificationCenter.current().delegate = NotificationCoordinator.shared
-        NotificationCoordinator.shared.onStartRecording = {
-            Task { @MainActor in await coordinator.start(context: container.mainContext) }
+        NotificationCoordinator.shared.onStartRecording = { eventID in
+            Task { @MainActor in
+                let event = eventID.flatMap { CalendarService().upcomingMeeting(withID: $0) }
+                await coordinator.start(context: container.mainContext, event: event)
+            }
         }
         Task { await ReminderScheduler.refresh() }
 

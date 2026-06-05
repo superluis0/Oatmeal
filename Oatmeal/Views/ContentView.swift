@@ -122,6 +122,7 @@ struct ContentView: View {
                     onConsumedAutoWrapUp: { justRecordedID = nil },
                     onDelete: { requestDelete(meeting) },
                     onOpenMeeting: { selection = $0 })
+                    .id(meeting.persistentModelID)
             } else {
                 OatEmptyState(
                     icon: "waveform",
@@ -174,6 +175,15 @@ struct ContentView: View {
         .onChange(of: selection) { _, newValue in
             if newValue != nil { resetDestinations() }
         }
+        // Drop the selected meeting the instant it's deleted out from under us —
+        // by any path — so the detail view can't read a dead SwiftData object
+        // during a later layout pass (which traps inside SwiftData).
+        .onChange(of: coordinator.lastDiscardedMeetingID) { _, id in
+            if let id, selection?.persistentModelID == id { selection = nil }
+        }
+        .onChange(of: meetings.map(\.persistentModelID)) { _, ids in
+            if let sel = selection, !ids.contains(sel.persistentModelID) { selection = nil }
+        }
         .safeAreaInset(edge: .top) {
             if showDetectionBanner {
                 detectionBanner
@@ -185,6 +195,7 @@ struct ContentView: View {
                 crashNotice = crash
                 Log.lastCrashReport = nil
             }
+            Task { await UpdateChecker.shared.checkIfDue() }
         }
         .onDisappear { detector.stopMonitoring() }
         .alert("Oatmeal quit unexpectedly last time", isPresented: Binding(

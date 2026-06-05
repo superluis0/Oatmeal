@@ -325,6 +325,11 @@ struct MeetingDetailView: View {
                     Button {
                         Task { await reextractActions() }
                     } label: { Label("Re-extract action items", systemImage: "arrow.triangle.2.circlepath") }
+                    if coordinator != nil {
+                        Button {
+                            Task { await coordinator?.regenerateSummary(for: meeting, context: context) }
+                        } label: { Label("Regenerate summary", systemImage: "sparkles") }
+                    }
                 } label: {
                     Label("Follow up", systemImage: "arrowshape.turn.up.right")
                 }
@@ -778,9 +783,11 @@ struct MeetingDetailView: View {
         defer { isEnhancing = false }
         let template = TemplateProvider.resolve(name: meeting.templateName ?? AppSettings.defaultTemplate, context: context)
         meeting.templateName = template.name
+        let identity = MeetingIdentity.preamble(knownSpeakers: meeting.speakerNames)
+        let grounded = MeetingIdentity.ground(transcript: meeting.transcriptText, userName: AppSettings.userName)
         do {
             let result = try await NoteEnhancementService()
-                .enhance(rawNotes: meeting.notes, transcript: meeting.transcriptText, template: template)
+                .enhance(rawNotes: meeting.notes, transcript: grounded, template: template, identity: identity)
             meeting.enhancedNotes = result.markdown
             meeting.noteBlocks = result.blocks
             try? context.save()
@@ -1023,13 +1030,99 @@ struct MarkdownView: View {
     private var bodyFont: Font { .system(size: 13 * scale) }
 
     var body: some View {
+        let blocks = Self.groupBlocks(Self.stripFence(Self.sanitizeLinks(markdown)).components(separatedBy: "\n"))
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(Self.sanitizeLinks(markdown).components(separatedBy: "\n").enumerated()), id: \.offset) { _, raw in
-                lineView(raw)
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .line(let raw): lineView(raw)
+                case .table(let header, let rows): tableView(header: header, rows: rows)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
+    }
+
+    // MARK: - Block grouping (so tables render as tables, not raw pipes)
+
+    private enum Block { case line(String); case table(header: [String], rows: [[String]]) }
+
+    private static func groupBlocks(_ lines: [String]) -> [Block] {
+        var blocks: [Block] = []
+        var i = 0
+        while i < lines.count {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
+            if isTableRow(trimmed), i + 1 < lines.count,
+               isTableSeparator(lines[i + 1].trimmingCharacters(in: .whitespaces)) {
+                let header = cells(trimmed)
+                var rows: [[String]] = []
+                var j = i + 2
+                while j < lines.count, isTableRow(lines[j].trimmingCharacters(in: .whitespaces)) {
+                    rows.append(cells(lines[j].trimmingCharacters(in: .whitespaces)))
+                    j += 1
+                }
+                blocks.append(.table(header: header, rows: rows))
+                i = j
+            } else {
+                blocks.append(.line(lines[i]))
+                i += 1
+            }
+        }
+        return blocks
+    }
+
+    private static func isTableRow(_ s: String) -> Bool { s.hasPrefix("|") && s.dropFirst().contains("|") }
+
+    private static func isTableSeparator(_ s: String) -> Bool {
+        guard s.hasPrefix("|") else { return false }
+        let cs = cells(s)
+        return !cs.isEmpty && cs.allSatisfy { c in !c.isEmpty && c.allSatisfy { $0 == "-" || $0 == ":" || $0 == " " } }
+    }
+
+    private static func cells(_ s: String) -> [String] {
+        var t = Substring(s)
+        if t.hasPrefix("|") { t = t.dropFirst() }
+        if t.hasSuffix("|") { t = t.dropLast() }
+        return t.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// Strips a single wrapping ``` / ```markdown code fence some models emit.
+    static func stripFence(_ text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        while let f = lines.first, f.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeFirst() }
+        while let l = lines.last, l.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeLast() }
+        if lines.first?.trimmingCharacters(in: .whitespaces).hasPrefix("```") == true,
+           lines.last?.trimmingCharacters(in: .whitespaces) == "```" {
+            lines.removeFirst()
+            if !lines.isEmpty { lines.removeLast() }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    @ViewBuilder
+    private func tableView(header: [String], rows: [[String]]) -> some View {
+        let columns = max(header.count, rows.map(\.count).max() ?? 0)
+        VStack(spacing: 0) {
+            tableRow(header, columns: columns, bold: true)
+            Divider().overlay(Theme.hairline)
+            ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
+                tableRow(row, columns: columns, bold: false)
+                if idx < rows.count - 1 { Divider().overlay(Theme.hairline.opacity(0.5)) }
+            }
+        }
+        .padding(8)
+        .background(Theme.surfaceAlt, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+    }
+
+    private func tableRow(_ cells: [String], columns: Int, bold: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            ForEach(0..<columns, id: \.self) { c in
+                Text(inline(c < cells.count ? cells[c] : ""))
+                    .font(.system(size: 12.5 * scale, weight: bold ? .semibold : .regular))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 3)
     }
 
     @ViewBuilder

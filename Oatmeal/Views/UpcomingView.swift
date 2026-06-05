@@ -122,7 +122,7 @@ struct UpcomingView: View {
                 } else {
                     Button("Record") {
                         NSApp.activate(ignoringOtherApps: true)
-                        Task { await coordinator.start(context: context) }
+                        Task { await coordinator.start(context: context, event: meeting) }
                     }
                     .buttonStyle(OatPrimaryButton())
                     .disabled(coordinator.isBusy || coordinator.isRecording)
@@ -135,7 +135,7 @@ struct UpcomingView: View {
     private func joinAndRecord(_ meeting: UpcomingMeeting) {
         if let url = meeting.joinURL { NSWorkspace.shared.open(url) }
         NSApp.activate(ignoringOtherApps: true)
-        Task { await coordinator.start(context: context) }
+        Task { await coordinator.start(context: context, event: meeting) }
     }
 
     private var accessPrompt: some View {

@@ -37,6 +37,10 @@ final class Meeting {
     /// Kept in sync with `enhancedNotes` (the flat Markdown used for export/search).
     var noteBlocks: [NoteBlock]
 
+    /// The most recent on-demand coaching / framework-scoring output (Markdown),
+    /// persisted so it survives leaving the Analytics tab. Empty until generated.
+    var coachingNotes: String = ""
+
     @Relationship(deleteRule: .cascade, inverse: \TranscriptSegment.meeting)
     var segments: [TranscriptSegment]
 

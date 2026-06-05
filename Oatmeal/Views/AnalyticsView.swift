@@ -5,10 +5,11 @@ import Charts
 /// plus on-demand LLM coaching and opt-in BANT/MEDDIC scoring.
 struct AnalyticsView: View {
     let meeting: Meeting
+    @Environment(\.modelContext) private var context
 
-    @State private var coaching: String?
     @State private var working = false
     @State private var error: String?
+    @State private var expanded = true
 
     private var analytics: MeetingAnalytics {
         MeetingAnalytics.compute(meeting.orderedSegments.map {
@@ -78,24 +79,40 @@ struct AnalyticsView: View {
         GroupBox {
             VStack(alignment: .leading, spacing: Theme.Space.sm) {
                 HStack {
-                    Button { Task { await run { try await CoachingService().coach(transcript: meeting.transcriptText, notes: notes) } } } label: {
+                    Button { generate("Coaching") { try await CoachingService().coach(transcript: meeting.transcriptText, notes: notes) } } label: {
                         Label("Coaching", systemImage: "lightbulb")
                     }
                     .buttonStyle(OatSecondaryButton())
-                    Button { Task { await run { try await CoachingService().score(framework: "BANT", transcript: meeting.transcriptText, notes: notes) } } } label: {
+                    Button { generate("BANT score") { try await CoachingService().score(framework: "BANT", transcript: meeting.transcriptText, notes: notes) } } label: {
                         Text("Score: BANT")
                     }
                     .buttonStyle(OatSecondaryButton())
-                    Button { Task { await run { try await CoachingService().score(framework: "MEDDIC", transcript: meeting.transcriptText, notes: notes) } } } label: {
+                    Button { generate("MEDDIC score") { try await CoachingService().score(framework: "MEDDIC", transcript: meeting.transcriptText, notes: notes) } } label: {
                         Text("Score: MEDDIC")
                     }
                     .buttonStyle(OatSecondaryButton())
                     Spacer()
                     if working { ProgressView().controlSize(.small) }
                 }
-                if let coaching {
+                if !meeting.coachingNotes.isEmpty {
                     Divider().overlay(Theme.hairline)
-                    MarkdownView(markdown: coaching)
+                    DisclosureGroup(isExpanded: $expanded) {
+                        MarkdownView(markdown: meeting.coachingNotes).padding(.top, 4)
+                    } label: {
+                        HStack {
+                            Text("Analysis").font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Button {
+                                meeting.coachingNotes = ""
+                                try? context.save()
+                            } label: {
+                                Image(systemName: "xmark.circle")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Theme.textTertiary)
+                            .help("Clear this analysis")
+                        }
+                    }
                 }
                 Text("Interrupts are approximate (mic and meeting audio are captured as separate streams).")
                     .font(.caption2).foregroundStyle(Theme.textTertiary)
@@ -114,10 +131,23 @@ struct AnalyticsView: View {
         meeting.enhancedNotes.isEmpty ? (meeting.liveSummary?.text ?? meeting.notes) : meeting.enhancedNotes
     }
 
-    private func run(_ op: @escaping () async throws -> String) async {
-        working = true
-        defer { working = false }
-        do { coaching = try await op() } catch { self.error = error.localizedDescription }
+    /// Runs an analysis, persists the result on the meeting (so it survives
+    /// leaving the tab), and expands the accordion.
+    private func generate(_ label: String, _ op: @escaping () async throws -> String) {
+        guard !working else { return }
+        Task {
+            working = true
+            defer { working = false }
+            do {
+                let result = try await op()
+                guard meeting.modelContext != nil else { return }
+                meeting.coachingNotes = "## \(label)\n\n" + result.trimmingCharacters(in: .whitespacesAndNewlines)
+                try? context.save()
+                expanded = true
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     private func percent(_ value: Double, of total: Double) -> String {
