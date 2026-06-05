@@ -83,8 +83,17 @@ struct OatmealApp: App {
         // Recover meetings if the store came up empty (e.g. after a store reset),
         // then write a fresh full backup. This is the safety net against data loss.
         let restored = StoreBackup.restoreIfEmpty(context: container.mainContext)
-        if restored > 0 { Log.warn("Restored \(restored) meeting(s) from backup", "store") }
-        StoreBackup.snapshot(context: container.mainContext)
+        if restored > 0 {
+            Log.warn("Restored \(restored) meeting(s) from backup", "store")
+            // The just-imported objects are fragile to read in this same runloop
+            // turn — reindex + snapshot on the NEXT turn, after the import settles.
+            DispatchQueue.main.async {
+                StoreBackup.reindexAll(context: container.mainContext)
+                StoreBackup.snapshot(context: container.mainContext)
+            }
+        } else {
+            StoreBackup.snapshot(context: container.mainContext)
+        }
         if let crash = Log.consumeLastCrash() {
             Log.warn("Previous session ended in a crash:\n\(crash)", "crash")
             Log.lastCrashReport = crash

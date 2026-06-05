@@ -156,8 +156,9 @@ enum StoreBackup {
             }
             count += 1
         }
-        try? context.save()
-        reindexAll(context: context)
+        // Verify the save; reindexing is deferred to the next runloop by the caller
+        // (reading the just-inserted segments in THIS runloop traps inside SwiftData).
+        do { try context.save() } catch { Log.error("restore import save failed", "store", error) }
         return count
     }
 
@@ -196,8 +197,9 @@ enum StoreBackup {
             }
             count += 1
         }
-        try? context.save()
-        reindexAll(context: context)
+        // Verify the save; reindexing is deferred to the next runloop by the caller
+        // (reading the just-inserted segments in THIS runloop traps inside SwiftData).
+        do { try context.save() } catch { Log.error("restore import save failed", "store", error) }
         return count
     }
 
@@ -238,7 +240,10 @@ enum StoreBackup {
         }
     }
 
-    private static func reindexAll(context: ModelContext) {
+    /// Rebuilds embedding chunks for every meeting. MUST be called on a fresh
+    /// runloop turn after an import — never inside the import transaction, where
+    /// reading just-inserted segment relationships traps inside SwiftData.
+    static func reindexAll(context: ModelContext) {
         let index = SemanticIndex(context: context)
         for m in (try? context.fetch(FetchDescriptor<Meeting>())) ?? [] { index.reindex(m) }
     }

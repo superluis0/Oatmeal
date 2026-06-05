@@ -256,6 +256,17 @@ struct MeetingDetailView: View {
     }
 
     var body: some View {
+        // Defense in depth: if this meeting was deleted out from under the view,
+        // render nothing rather than read a dead SwiftData object during a layout
+        // pass (which traps). Pairs with the selection-clearing in ContentView.
+        if meeting.modelContext == nil {
+            Color.clear
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.lg) {

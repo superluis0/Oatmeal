@@ -45,6 +45,9 @@ final class UpdateChecker {
         guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else { return }
         var req = URLRequest(url: url)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        // GitHub's API requires a User-Agent; set it explicitly so the check can't
+        // silently 403 if URLSession's default ever changes.
+        req.setValue("Oatmeal/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 10
 
         do {
