@@ -115,14 +115,15 @@ struct ContentView: View {
             } else if showDecisions {
                 DecisionsView(onOpenMeeting: { selection = $0; showDecisions = false })
             } else if let meeting = selection, meeting.modelContext != nil {
-                MeetingDetailView(
-                    meeting: meeting,
+                // Pass only the stable id (always safe to read, even on a deleted
+                // object); the container resolves the live meeting from @Query.
+                MeetingDetailContainer(
+                    meetingID: meeting.persistentModelID,
                     coordinator: coordinator,
-                    autoWrapUp: justRecordedID == meeting.id,
+                    justRecordedID: justRecordedID,
                     onConsumedAutoWrapUp: { justRecordedID = nil },
-                    onDelete: { requestDelete(meeting) },
+                    onDelete: { requestDelete($0) },
                     onOpenMeeting: { selection = $0 })
-                    .id(meeting.persistentModelID)
             } else {
                 OatEmptyState(
                     icon: "waveform",

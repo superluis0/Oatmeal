@@ -179,6 +179,40 @@ struct RecordingView: View {
 
 // MARK: - Saved meeting detail
 
+/// Resolves the meeting for the detail pane from a LIVE `@Query`, keyed by the
+/// always-safe `persistentModelID`. When the meeting is deleted by any path, the
+/// query stops returning it and SwiftUI re-renders to the empty state *before* a
+/// layout pass can read a dead SwiftData object — the root cause of the recurring
+/// deleted-object traps. The detail view itself is only ever handed a live object.
+struct MeetingDetailContainer: View {
+    let meetingID: PersistentIdentifier
+    var coordinator: RecordingCoordinator
+    var justRecordedID: UUID?
+    var onConsumedAutoWrapUp: () -> Void
+    var onDelete: (Meeting) -> Void
+    var onOpenMeeting: (Meeting) -> Void
+
+    @Query private var allMeetings: [Meeting]
+
+    var body: some View {
+        if let meeting = allMeetings.first(where: { $0.persistentModelID == meetingID }) {
+            MeetingDetailView(
+                meeting: meeting,
+                coordinator: coordinator,
+                autoWrapUp: meeting.id == justRecordedID,
+                onConsumedAutoWrapUp: onConsumedAutoWrapUp,
+                onDelete: { onDelete(meeting) },
+                onOpenMeeting: onOpenMeeting)
+            .id(meetingID)
+        } else {
+            OatEmptyState(
+                icon: "waveform",
+                title: "Nothing selected yet",
+                message: "Start a new recording, import audio, or pick a past meeting from the sidebar.")
+        }
+    }
+}
+
 struct MeetingDetailView: View {
     @Bindable var meeting: Meeting
     var coordinator: RecordingCoordinator? = nil
