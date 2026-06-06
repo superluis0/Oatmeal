@@ -147,36 +147,42 @@ final class CalendarService {
     }
 
     private func meetingURL(_ event: EKEvent) -> URL? {
-        if let url = event.url, isMeetingHost(url.absoluteString) { return url }
+        if let url = event.url, isMeetingHost(url) { return url }
         let blob = [event.location, event.notes, event.url?.absoluteString]
             .compactMap { $0 }.joined(separator: " ")
         for token in blob.split(whereSeparator: { " \n\t\r<>()[]\"'".contains($0) }) {
             let s = String(token)
-            if isMeetingHost(s), let url = URL(string: s.hasPrefix("http") ? s : "https://\(s)") {
-                return url
-            }
+            guard s.contains("."),
+                  let url = URL(string: s.hasPrefix("http") ? s : "https://\(s)"),
+                  isMeetingHost(url) else { continue }
+            return url
         }
         return nil
     }
 
-    private func isMeetingHost(_ s: String) -> Bool {
-        let hosts = [
-            "zoom.us", "zoom.com",
-            "meet.google.com", "g.co/meet",
-            "teams.microsoft.com", "teams.live.com",
-            "webex.com",
-            "calendly.com", "cal.com", "cal.ai",
-            "whereby.com", "around.co", "around.com",
-            "meet.jit.si", "jitsi",
-            "gotomeeting.com", "gotomeet.me",
-            "chime.aws",
-            "join.skype.com",
-            "bluejeans.com", "ringcentral.com", "8x8.vc",
-            "meetings.hubspot.com", "savvycal.com"
-        ]
-        let lower = s.lowercased()
-        return hosts.contains { lower.contains($0) }
+    /// True only when the URL's parsed HOST is (a subdomain of) a known meeting
+    /// provider — never a substring of the whole string. This rejects spoofed
+    /// links from untrusted calendar invites, e.g. `https://zoom.us.attacker.com/…`
+    /// (host `zoom.us.attacker.com`) which a substring check would have opened.
+    private func isMeetingHost(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return Self.meetingDomains.contains { host == $0 || host.hasSuffix("." + $0) }
     }
+
+    private static let meetingDomains = [
+        "zoom.us", "zoom.com",
+        "meet.google.com", "g.co",
+        "teams.microsoft.com", "teams.live.com",
+        "webex.com",
+        "calendly.com", "cal.com", "cal.ai",
+        "whereby.com", "around.co", "around.com",
+        "jit.si",
+        "gotomeeting.com", "gotomeet.me",
+        "chime.aws",
+        "skype.com",
+        "bluejeans.com", "ringcentral.com", "8x8.vc",
+        "hubspot.com", "savvycal.com"
+    ]
 
     /// Events starting within the next `window` seconds (excluding all-day),
     /// for scheduling pre-meeting reminders.

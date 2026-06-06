@@ -168,16 +168,9 @@ enum MeetingContextBuilder {
     /// Writes the exact context handed to the model to a file so retrieval issues
     /// can be inspected directly (overwritten each send).
     private static func debugDump(question: String, keywords: Set<String>, info: String, context: String) {
-        Log.info("chat context: \(info) — q=\"\(question.prefix(80))\" kw=\(keywords.sorted())", "chat")
-        guard let dir = Log.logDirectory else { return }
-        let url = dir.appendingPathComponent("last-chat-context.txt")
-        let dump = """
-        Q: \(question)
-        keywords: \(keywords.sorted())
-        path: \(info)
-        ───────────────────────────────────────────
-        \(context)
-        """
-        try? dump.data(using: .utf8)?.write(to: url)
+        // Content-free breadcrumb only. We deliberately do NOT persist the
+        // question or transcript context to disk: meeting content stays in the
+        // app's data store, never in plaintext log files.
+        Log.info("chat context: \(info)", "chat")
     }
 }
