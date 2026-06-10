@@ -292,6 +292,7 @@ struct SettingsView: View {
                     HStack {
                         Label("Version \(update.version) is available", systemImage: "arrow.down.circle.fill")
                             .foregroundStyle(Theme.accent)
+                            .updatePulse()
                         Spacer()
                         Link("View release", destination: update.url)
                     }

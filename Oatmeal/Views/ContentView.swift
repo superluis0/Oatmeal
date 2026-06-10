@@ -23,6 +23,8 @@ struct ContentView: View {
     @State private var deleteTask: Task<Void, Never>?
     @State private var justRecordedID: UUID?
     @State private var crashNotice: String?
+    /// Monotonic counter that fires the meeting-saved celebration once per bump.
+    @State private var celebrationTick = 0
 
     private func resetDestinations() {
         showGlobalChat = false; showPeople = false; showTasks = false
@@ -160,7 +162,14 @@ struct ContentView: View {
             default: wasMidCapture = false
             }
             if newValue == .idle, let last = meetings.first {
-                if wasMidCapture { justRecordedID = last.id }
+                if wasMidCapture {
+                    justRecordedID = last.id
+                    // Genuine successful finalize (processing/recording -> idle with
+                    // a saved meeting): celebrate once. Discards/errors don't land
+                    // here — a discard clears selection via lastDiscardedMeetingID and
+                    // an error transitions to .error, not .idle.
+                    celebrationTick += 1
+                }
                 selection = last
             }
         }
@@ -214,6 +223,9 @@ struct ContentView: View {
         }
         .background(shortcutButtons)
         .overlay(alignment: .bottom) { if pendingDelete != nil { undoToast } }
+        // A one-shot confetti burst (calm checkmark under reduce-motion) that floats
+        // above the whole split view when a meeting is successfully saved.
+        .celebration(trigger: celebrationTick)
         .sheet(isPresented: $showPalette) {
             CommandPaletteView(
                 meetings: visibleMeetings,

@@ -43,8 +43,9 @@ Everything runs on your Mac. No cloud. No account. No bots in your meetings.</p>
 - 🧠 **Summaries &amp; action items:** decisions, owners, numbers, and follow-ups, extracted automatically.
 - 💬 **Chat with a meeting:** ask anything, and hybrid semantic + keyword retrieval grounds every answer in *that* meeting.
 - 🌍 **Ask across everything:** query your whole history with tappable source citations.
-- 🟢 **Live Assist:** private, real-time talking points during a call (great for interviews and sales).
-- 🪟 **Floating HUD:** a glanceable panel that stays above full-screen video calls.
+- 🟢 **Live Assist:** when you're asked something, a discreet teleprompter near the top of your screen quietly suggests what to say next, in plain, spoken language. Built for interviews and sales.
+- 🪟 **Floats over your call:** the cue and your record controls stay above full-screen video calls (Zoom, Teams, Meet), always one glance away.
+- 🎬 **Alive, not flashy:** an audio-reactive record button and waveform, streaming notes, and tasteful motion throughout, all of it respecting Reduce Motion.
 - ✅ **Tasks &amp; Reminders:** action items become tasks, and optionally sync to Apple Reminders.
 - 🔌 **Local MCP server:** expose meetings (read-only) to agents like Claude.
 - 🔒 **Private by design:** no cloud, no telemetry, no account. Data lives in `~/Library/Application Support/Oatmeal`.

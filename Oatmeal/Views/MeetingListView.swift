@@ -160,6 +160,7 @@ struct MeetingListView: View {
                         .foregroundStyle(Theme.accent)
                 }
                 .buttonStyle(.plain)
+                .updatePulse()
                 .help("Oatmeal \(update.version) is available — view the release")
             }
         }
@@ -174,7 +175,13 @@ struct MeetingListView: View {
             Button {
                 Task { await coordinator.stop(context: context) }
             } label: {
-                Label("Stop Recording", systemImage: "stop.fill").frame(maxWidth: .infinity)
+                HStack(spacing: Theme.Space.xs) {
+                    RecordOrb(level: coordinator.audioLevel,
+                              isActive: true,
+                              size: 12)
+                    Label("Stop Recording", systemImage: "stop.fill")
+                }
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(OatPrimaryButton(fullWidth: true))
             .overlay(recordBorder)

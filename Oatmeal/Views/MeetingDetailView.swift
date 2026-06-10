@@ -7,6 +7,7 @@ import AppKit
 struct RecordingView: View {
     @Bindable var coordinator: RecordingCoordinator
     @Environment(\.modelContext) private var context
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,7 +33,7 @@ struct RecordingView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         ForEach(coordinator.liveSegments) { seg in
-                            SegmentRow(speaker: seg.speaker, text: seg.text)
+                            SegmentRow(speaker: seg.speaker, text: seg.text, streaming: true)
                         }
                     }
                     .padding()
@@ -132,7 +133,13 @@ struct RecordingView: View {
                 .padding(Theme.Space.xs)
                 .frame(height: 72)
                 .background(Theme.surfaceAlt, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
-            if !coordinator.liveEnhanced.isEmpty {
+            if coordinator.isEnhancingLive {
+                // Living skeleton while the live enhance runs (button keeps its spinner).
+                SkeletonLines(lineWidths: [1.0, 0.9, 0.72])
+                    .padding(.vertical, 4)
+                    .frame(maxHeight: 150, alignment: .top)
+                    .transition(.opacity)
+            } else if !coordinator.liveEnhanced.isEmpty {
                 ScrollView {
                     MarkdownView(markdown: coordinator.liveEnhanced).padding(.vertical, 4)
                 }
@@ -141,6 +148,7 @@ struct RecordingView: View {
         }
         .padding(Theme.Space.md)
         .background(Theme.bgElevated)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.25), value: coordinator.isEnhancingLive)
     }
 
     private var statusText: String {
@@ -167,6 +175,10 @@ struct RecordingView: View {
                 .font(.system(.subheadline))
                 .foregroundStyle(Theme.textSecondary)
             Spacer()
+            if coordinator.isRecording {
+                LiveWaveform(level: coordinator.audioLevel)
+                    .frame(width: 120, height: 24)
+            }
         }
         .padding(Theme.Space.md)
     }
@@ -221,6 +233,7 @@ struct MeetingDetailView: View {
     var onDelete: () -> Void = {}
     var onOpenMeeting: (Meeting) -> Void = { _ in }
     @Environment(\.modelContext) private var context
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query(sort: \Meeting.date, order: .reverse) private var allMeetings: [Meeting]
 
     enum DetailTab: String, CaseIterable, Identifiable {
@@ -233,6 +246,8 @@ struct MeetingDetailView: View {
     }
 
     @State private var tab: DetailTab = .enhanced
+    /// Drives the sliding selection indicator in the custom segmented tab control.
+    @Namespace private var tabIndicator
     @State private var isEnhancing = false
     @State private var enhanceError: String?
     @State private var editingTranscript = false
@@ -308,18 +323,10 @@ struct MeetingDetailView: View {
                 summarySection
                 recurringSection
                 highlightsSection
-                Picker("View", selection: $tab) {
-                    ForEach(DetailTab.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                switch tab {
-                case .enhanced: enhancedSection
-                case .notes: notesSection
-                case .transcript: transcriptSection
-                case .chat: MeetingChatView(meeting: meeting)
-                case .analytics: AnalyticsView(meeting: meeting)
-                }
+                OatSegmentedTabs(selection: $tab,
+                                 namespace: tabIndicator,
+                                 reduceMotion: reduceMotion)
+                tabContent
             }
             .padding(Theme.Space.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -460,6 +467,25 @@ struct MeetingDetailView: View {
         } // ScrollViewReader
     }
 
+    /// The active tab's content, cross-faded when `tab` changes. Each heavy tab
+    /// (Chat, Analytics, transcript) keeps a stable `.id` so its internal state
+    /// isn't torn down/rebuilt by the transition — only the opacity is animated.
+    @ViewBuilder
+    private var tabContent: some View {
+        ZStack {
+            switch tab {
+            case .enhanced: enhancedSection
+            case .notes: notesSection
+            case .transcript: transcriptSection
+            case .chat: MeetingChatView(meeting: meeting)
+            case .analytics: AnalyticsView(meeting: meeting)
+            }
+        }
+        .id(tab)
+        .transition(reduceMotion ? .identity : .opacity)
+        .animation(Motion.reveal(reduceMotion), value: tab)
+    }
+
     private func loadAudioIfNeeded() {
         if let path = meeting.audioPath, FileManager.default.fileExists(atPath: path) {
             player.load(path: path)
@@ -593,8 +619,9 @@ struct MeetingDetailView: View {
                     if !meeting.liveActionItems.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Action Items").font(.headline)
-                            ForEach(meeting.liveActionItems.sorted { !$0.isDone && $1.isDone }) { item in
+                            ForEach(Array(meeting.liveActionItems.sorted { !$0.isDone && $1.isDone }.enumerated()), id: \.element.persistentModelID) { idx, item in
                                 ActionItemRow(item: item)
+                                    .staggeredReveal(index: idx, reduceMotion: reduceMotion, rise: false)
                             }
                         }
                     } else if !summary.actionItems.isEmpty {
@@ -715,11 +742,12 @@ struct MeetingDetailView: View {
     private func bulletList(title: String, items: [String]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.headline)
-            ForEach(items, id: \.self) { item in
+            ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                 HStack(alignment: .top, spacing: 8) {
                     Text("•")
                     Text(inlineMarkdown(stripBullet(item)))
                 }
+                .staggeredReveal(index: idx, reduceMotion: reduceMotion, rise: false)
             }
         }
     }
@@ -771,7 +799,12 @@ struct MeetingDetailView: View {
                     .disabled(isEnhancing || meeting.segments.isEmpty)
                 }
                 Divider()
-                if meeting.noteBlocks.isEmpty && meeting.enhancedNotes.isEmpty {
+                if isEnhancing {
+                    // While generation runs, show a living skeleton of the notes
+                    // area so the wait feels alive (the button keeps its spinner).
+                    enhancingSkeleton
+                        .transition(.opacity)
+                } else if meeting.noteBlocks.isEmpty && meeting.enhancedNotes.isEmpty {
                     Text(meeting.segments.isEmpty
                          ? "No transcript yet — record a meeting to enhance notes."
                          : "No enhanced notes yet. Tap Enhance to generate them from your notes and the transcript.")
@@ -781,13 +814,26 @@ struct MeetingDetailView: View {
                     provenanceLegend
                 } else {
                     MarkdownView(markdown: meeting.enhancedNotes)
+                        .appearReveal(reduceMotion: reduceMotion, rise: false)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(8)
+            .animation(Motion.reveal(reduceMotion), value: isEnhancing)
         } label: {
             Label("Enhanced Notes", systemImage: "wand.and.stars")
         }
+    }
+
+    /// A shimmering skeleton of the notes area shown while `isEnhancing`. Lines
+    /// only sweep while visible; the modifier drops the overlay once dismissed.
+    private var enhancingSkeleton: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.md) {
+            SkeletonLines(lineWidths: [1.0, 0.94, 0.88])
+            SkeletonLines(lineWidths: [0.7, 0.96, 0.82, 0.6])
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("Enhancing notes…")
     }
 
     private var provenanceLegend: some View {
@@ -884,6 +930,15 @@ struct MeetingDetailView: View {
                             .background(
                                 RoundedRectangle(cornerRadius: Theme.Radius.sm)
                                     .fill(jumpTarget == seg.persistentModelID ? Theme.accentSoft : .clear)
+                            )
+                            // One-shot staggered fade-in when the transcript first
+                            // appears. Pure opacity (no rise) so the reveal never
+                            // fights the programmatic scrollTo / jumpTarget anchor;
+                            // guarded internally so it fires once, not on scroll.
+                            .appearReveal(
+                                reduceMotion: reduceMotion,
+                                delay: Reveal.staggerDelay(idx, reduceMotion: reduceMotion),
+                                rise: false
                             )
                     }
                 }
@@ -1060,6 +1115,68 @@ struct MeetingDetailView: View {
                 .textFieldStyle(.roundedBorder)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Custom segmented tab control
+
+/// A warm, Theme-styled segmented control with a sliding selection indicator.
+///
+/// The highlight is a single rounded capsule that *morphs* between segments via
+/// `matchedGeometryEffect` (keyed off the shared `namespace`), so switching tabs
+/// — whether by click or by the ⌘1–5 shortcuts that mutate the same binding —
+/// animates the pill smoothly to its new home. Each segment is a real `Button`
+/// with a VoiceOver label and `.isSelected` trait, so the control stays fully
+/// accessible.
+///
+/// Reduce-motion: the indicator jumps instantly (the animation resolves to
+/// `nil`), matching the rest of the app's motion contract.
+private struct OatSegmentedTabs: View {
+    @Binding var selection: MeetingDetailView.DetailTab
+    var namespace: Namespace.ID
+    let reduceMotion: Bool
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(MeetingDetailView.DetailTab.allCases) { item in
+                segment(item)
+            }
+        }
+        .padding(3)
+        .background(Theme.surfaceAlt, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .strokeBorder(Theme.border, lineWidth: 1)
+        )
+        // Drive the indicator morph from the binding so click *and* ⌘1–5 animate.
+        .animation(Motion.gentle(reduceMotion), value: selection)
+    }
+
+    @ViewBuilder
+    private func segment(_ item: MeetingDetailView.DetailTab) -> some View {
+        let isSelected = selection == item
+        Button {
+            selection = item
+        } label: {
+            Text(item.rawValue)
+                .font(.system(.callout).weight(isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? Theme.onAccent : Theme.textSecondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                            .fill(Theme.accentGradient)
+                            .matchedGeometryEffect(id: "tabIndicator", in: namespace)
+                            .shadow(color: Theme.accent.opacity(0.30), radius: 5, y: 2)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.rawValue)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }
 
@@ -1256,11 +1373,13 @@ struct ProvenanceNotesView: View {
     @State private var expanded: Set<UUID> = []
     @State private var cache: [UUID: [SegmentRef]] = [:]
     @State private var computing: Set<UUID> = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(blocks) { block in
+            ForEach(Array(blocks.enumerated()), id: \.element.id) { idx, block in
                 blockRow(block)
+                    .staggeredReveal(index: idx, reduceMotion: reduceMotion, rise: false)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1361,6 +1480,14 @@ struct SegmentRow: View {
     /// When false, this line is a continuation of the same speaker's turn — the
     /// label is hidden and the text is indented to read as one grouped block.
     var showSpeaker: Bool = true
+    /// Live mode: the live transcript REPLACES `liveSegments` on every update
+    /// (two rolling rows, not an append-only list), so we can't fade in new rows
+    /// without thrashing. Instead, when `streaming` is on, we smooth the *text*
+    /// as it grows in place — a gentle interpolated content transition keyed on
+    /// the text — so new speech feels like it streams in without flicker.
+    var streaming: Bool = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var scale: CGFloat { Appearance.shared.fontScale }
 
@@ -1375,6 +1502,7 @@ struct SegmentRow: View {
                 .font(.system(size: 13 * scale))
                 .textSelection(.enabled)
                 .padding(.leading, showSpeaker ? 0 : 2)
+                .modifier(StreamingText(text: text, enabled: streaming, reduceMotion: reduceMotion))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1388,12 +1516,45 @@ struct SegmentRow: View {
     }
 }
 
+/// Smooths in-place text growth for the live transcript's rolling rows.
+///
+/// The live transcript replaces its segments wholesale on each update, so the
+/// row identity is stable but the `text` keeps growing. `contentTransition`
+/// interpolates that change and a `Motion.reveal`-gated animation keyed on the
+/// text makes the growth feel like streaming speech rather than a hard cut.
+///
+/// No-ops entirely when `enabled` is false (the saved transcript) or under
+/// reduce-motion (text updates instantly with no transition).
+private struct StreamingText: ViewModifier {
+    let text: String
+    let enabled: Bool
+    let reduceMotion: Bool
+
+    func body(content: Content) -> some View {
+        if enabled && !reduceMotion {
+            content
+                .contentTransition(.interpolate)
+                .animation(Motion.reveal(false), value: text)
+        } else {
+            content
+        }
+    }
+}
+
 // MARK: - Live Assist suggestion card
 
 struct LiveSuggestionCard: View {
+    /// How the card presents itself.
+    /// - `.panel`: the managed in-app list (card chrome, copy button, new/old styling).
+    /// - `.teleprompter`: the discreet floating overlay — chrome-free and large, so a
+    ///   single glance near your eyeline tells you what to say, without reading an app.
+    enum Style { case panel, teleprompter }
+
     let suggestion: LiveSuggestion
     /// The newest card — visually emphasized so it's catchable at a glance.
     var isLatest: Bool = false
+    /// Presentation context. Defaults to the in-app panel.
+    var style: Style = .panel
     /// Bumped each second by the parent to refresh the relative timestamp.
     var tick: Int = 0
 
@@ -1403,7 +1564,7 @@ struct LiveSuggestionCard: View {
         lines += suggestion.talkingPoints.map { "• \($0)" }
         if !suggestion.followUps.isEmpty {
             lines.append("Ask next:")
-            lines += suggestion.followUps.map { "– \($0)" }
+            lines += suggestion.followUps.map { "- \($0)" }
         }
         return lines.joined(separator: "\n")
     }
@@ -1416,38 +1577,92 @@ struct LiveSuggestionCard: View {
     }
 
     var body: some View {
+        switch style {
+        case .teleprompter: teleprompterBody
+        case .panel: panelBody
+        }
+    }
+
+    // MARK: - Teleprompter (floating overlay)
+
+    /// No card surface, no badges, no buttons — just large, readable lines that sit
+    /// on the panel's own translucent background. Reads as a glance, not an app.
+    private var teleprompterBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !suggestion.answer.isEmpty {
+                Text(suggestion.answer)
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if !suggestion.talkingPoints.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(suggestion.talkingPoints.enumerated()), id: \.offset) { _, point in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text("•").foregroundStyle(Theme.accent)
+                            Text(point).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .font(.callout)
+                        .foregroundStyle(Theme.textPrimary)
+                    }
+                }
+            }
+
+            if !suggestion.followUps.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Ask next").font(.footnote.weight(.semibold)).foregroundStyle(Theme.textSecondary)
+                    ForEach(Array(suggestion.followUps.enumerated()), id: \.offset) { _, q in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "arrow.turn.down.right").font(.caption).foregroundStyle(Theme.accent)
+                            Text(q).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .font(.callout)
+                        .foregroundStyle(Theme.textPrimary)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Panel (in-app managed list)
+
+    private var panelBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             header
 
             if !suggestion.answer.isEmpty {
                 Text(suggestion.answer)
-                    .font(.system(.subheadline).weight(isLatest ? .semibold : .regular))
+                    .font(.system(.body).weight(isLatest ? .semibold : .regular))
                     .foregroundStyle(Theme.textPrimary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if !suggestion.talkingPoints.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(suggestion.talkingPoints.enumerated()), id: \.offset) { _, point in
                         HStack(alignment: .top, spacing: 6) {
                             Text("•").foregroundStyle(Theme.accent)
                             Text(point).frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .font(.caption)
+                        .font(.footnote)
                     }
                 }
             }
 
             if !suggestion.followUps.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Ask next").font(.caption2.bold()).foregroundStyle(Theme.textSecondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Ask next").font(.caption.bold()).foregroundStyle(Theme.textSecondary)
                     ForEach(Array(suggestion.followUps.enumerated()), id: \.offset) { _, q in
                         HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "arrow.turn.down.right").font(.caption2).foregroundStyle(Theme.textSecondary)
+                            Image(systemName: "arrow.turn.down.right").font(.caption).foregroundStyle(Theme.textSecondary)
                             Text(q).frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .font(.caption)
+                        .font(.footnote)
                     }
                 }
             }

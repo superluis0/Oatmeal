@@ -27,6 +27,9 @@ final class RecordingCoordinator {
     var isSuggesting = false
     /// Non-fatal warning (e.g. system audio unavailable) shown during recording.
     var captureWarning: String?
+    /// Smoothed live input level in 0...1, driven by the mic+system sample flow.
+    /// Used by audio-reactive UI (e.g. the record orb). Updated on the main actor.
+    private(set) var audioLevel: Float = 0
     /// Set just before a meeting is deleted out from under the UI (e.g. discarding
     /// an empty failed recording), so the view layer can drop it from `selection`
     /// before the model is invalidated and a layout pass reads a dead object.
@@ -99,8 +102,17 @@ final class RecordingCoordinator {
             return
         }
 
-        engine.onMicSamples = { [transcription] samples in transcription.feedMic(samples) }
-        engine.onSystemSamples = { [transcription] samples in transcription.feedSystem(samples) }
+        // Feed transcription AND drive the live audio level off the same sample
+        // flow. Callbacks fire on the audio buffer queue, so the level update hops
+        // to the main actor (see ingestLevel).
+        engine.onMicSamples = { [weak self, transcription] samples in
+            transcription.feedMic(samples)
+            self?.ingestLevel(from: samples)
+        }
+        engine.onSystemSamples = { [weak self, transcription] samples in
+            transcription.feedSystem(samples)
+            self?.ingestLevel(from: samples)
+        }
 
         do {
             try await engine.start()
@@ -149,6 +161,7 @@ final class RecordingCoordinator {
 
         engine.onMicSamples = nil
         engine.onSystemSamples = nil
+        audioLevel = 0
         let (system, mic) = engine.stop()
         playChime("Pop")
         await transcription.endStreaming()
@@ -427,6 +440,30 @@ final class RecordingCoordinator {
             question = body.trimmingCharacters(in: .whitespaces) + "?"
         }
         return question.count >= 8 ? question : nil
+    }
+
+    // MARK: - Live audio level
+
+    /// Computes per-buffer RMS off the audio thread, then hops to the main actor
+    /// to fold it into the smoothed, observable `audioLevel`. Mic and system both
+    /// call this; whichever buffer is louder wins via the exponential smoother.
+    nonisolated private func ingestLevel(from samples: [Float]) {
+        guard !samples.isEmpty else { return }
+        var sumSquares: Double = 0
+        for sample in samples { sumSquares += Double(sample) * Double(sample) }
+        let rms = (sumSquares / Double(samples.count)).squareRoot()
+        // Speech RMS is small; apply gain and clamp into 0...1.
+        let gained = Float(min(rms * 6.0, 1.0))
+        Task { @MainActor [weak self] in self?.applyLevel(gained) }
+    }
+
+    /// Exponentially smooths toward `target` so the orb glides instead of jittering.
+    /// Rises fast (responsive to speech onset), falls slower (settles gracefully).
+    private func applyLevel(_ target: Float) {
+        guard isRecording else { audioLevel = 0; return }
+        let rising = target > audioLevel
+        let alpha: Float = rising ? 0.45 : 0.18
+        audioLevel += (target - audioLevel) * alpha
     }
 
     // MARK: - Live streaming captions

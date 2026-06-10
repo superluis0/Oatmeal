@@ -135,18 +135,14 @@ struct ActionItemRow: View {
     var showSource: Bool = false
     var onOpenMeeting: ((Meeting) -> Void)? = nil
     @Environment(\.modelContext) private var context
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.sm) {
             Button {
-                item.isDone.toggle()
-                if item.isDone { item.snoozedUntil = nil }
-                try? context.save()
-                RemindersService.syncCompletion(of: item)
+                toggleDone()
             } label: {
-                Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(item.isDone ? Theme.accent : Theme.textTertiary)
+                TaskCheckbox(isDone: item.isDone, reduceMotion: reduceMotion)
             }
             .buttonStyle(.plain)
 
@@ -155,6 +151,7 @@ struct ActionItemRow: View {
                     .font(.system(.body))
                     .foregroundStyle(item.isDone ? Theme.textSecondary : Theme.textPrimary)
                     .strikethrough(item.isDone, color: Theme.textTertiary)
+                    .animation(Motion.reveal(reduceMotion), value: item.isDone)
                 metadata
                 if showSource, let meeting = item.meeting, meeting.isAlive {
                     Button { onOpenMeeting?(meeting) } label: {
@@ -226,6 +223,18 @@ struct ActionItemRow: View {
         .menuIndicator(.hidden)
     }
 
+    /// Toggles completion. Unchanged behavior contract: flips `isDone`, clears
+    /// any snooze when completing, persists, and syncs to Reminders. Wrapped in a
+    /// reduce-motion-aware spring so the checkbox state change feels tactile.
+    private func toggleDone() {
+        withAnimation(Motion.gentle(reduceMotion)) {
+            item.isDone.toggle()
+        }
+        if item.isDone { item.snoozedUntil = nil }
+        try? context.save()
+        RemindersService.syncCompletion(of: item)
+    }
+
     private func setDue(_ date: Date?) {
         item.dueDate = date
         try? context.save()
@@ -234,5 +243,95 @@ struct ActionItemRow: View {
     private func snooze(_ date: Date?) {
         item.snoozedUntil = date
         try? context.save()
+    }
+}
+
+// MARK: - Satisfying checkbox
+
+/// The action-item checkbox: an empty ring that, on completion, pops with a
+/// spring, fills with the accent, draws a checkmark on, and emits one quiet
+/// accent ring flourish. Reverts cleanly when unchecked.
+///
+/// Reduce-motion: instant toggle — no bounce, no draw-on, no flourish — driven
+/// by the shared `Motion` tokens (which return `nil` when reduce-motion is on).
+private struct TaskCheckbox: View {
+    let isDone: Bool
+    let reduceMotion: Bool
+
+    /// Drives the checkmark stroke draw-on (0 = hidden, 1 = fully drawn).
+    @State private var drawProgress: CGFloat = 0
+    /// Drives the one-shot ring flourish that blooms outward on completion.
+    @State private var flourish = false
+    /// Transient scale "pop" applied the instant the box is completed.
+    @State private var popped = false
+
+    var body: some View {
+        ZStack {
+            // Base ring / filled disc.
+            Circle()
+                .strokeBorder(isDone ? Color.clear : Theme.textTertiary, lineWidth: 1.6)
+                .background(
+                    Circle().fill(isDone ? Theme.accent : Color.clear)
+                )
+
+            // Hand-drawn checkmark that traces on.
+            CheckmarkShape()
+                .trim(from: 0, to: reduceMotion ? (isDone ? 1 : 0) : drawProgress)
+                .stroke(Theme.onAccent, style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+                .padding(5)
+
+            // One-shot accent ring flourish (completion only). Never loops.
+            if flourish && !reduceMotion {
+                Circle()
+                    .stroke(Theme.accent, lineWidth: 1.5)
+                    .scaleEffect(flourish ? 1.7 : 1)
+                    .opacity(flourish ? 0 : 0.6)
+            }
+        }
+        .frame(width: 20, height: 20)
+        .scaleEffect(popped ? 1.18 : 1)
+        .animation(Motion.pop(reduceMotion), value: popped)
+        .contentShape(Rectangle())
+        .onChange(of: isDone) { _, done in
+            if reduceMotion {
+                drawProgress = done ? 1 : 0
+                return
+            }
+            if done {
+                // Spring "pop", then settle back.
+                withAnimation(Motion.pop(false)) { popped = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                    withAnimation(Motion.gentle(false)) { popped = false }
+                }
+                // Draw the check on, then fire a single flourish bloom.
+                withAnimation(.easeOut(duration: 0.25)) { drawProgress = 1 }
+                flourish = false
+                withAnimation(.easeOut(duration: 0.5)) { flourish = true }
+                // Reset the flourish flag after it blooms so it can re-fire later.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { flourish = false }
+            } else {
+                withAnimation(.easeIn(duration: 0.15)) { drawProgress = 0 }
+                flourish = false
+                popped = false
+            }
+        }
+        .onAppear {
+            // Reflect the persisted state without animating on first render.
+            drawProgress = isDone ? 1 : 0
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The classic checkmark path, drawn in a unit-ish space sized by the frame it's
+/// placed in. Used with `.trim` so it can be traced on.
+private struct CheckmarkShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let w = rect.width, h = rect.height
+        p.move(to: CGPoint(x: w * 0.18, y: h * 0.52))
+        p.addLine(to: CGPoint(x: w * 0.42, y: h * 0.74))
+        p.addLine(to: CGPoint(x: w * 0.82, y: h * 0.28))
+        return p
     }
 }
