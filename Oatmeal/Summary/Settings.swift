@@ -12,6 +12,7 @@ enum AppSettings {
     private static let preMeetingRemindersKey = "preMeetingReminders"
     private static let syncRemindersKey = "syncReminders"
     private static let modelVersionKey = "modelVersion"
+    private static let asrEngineKey = "asrEngine"
     private static let inPersonModeKey = "inPersonMode"
     private static let audioRetentionDaysKey = "audioRetentionDays"
     private static let upcomingVideoOnlyKey = "upcomingVideoOnly"
@@ -107,6 +108,14 @@ enum AppSettings {
     static var modelVersion: String {
         get { UserDefaults.standard.string(forKey: modelVersionKey) ?? "v2" }
         set { UserDefaults.standard.set(newValue, forKey: modelVersionKey) }
+    }
+
+    /// Live-captions engine: "parakeet" (proven, default) or "nemotron"
+    /// (NVIDIA's streaming model, downloads on first use). Applies to the next
+    /// recording; the final transcript pass is always Parakeet + diarizer.
+    static var asrEngine: String {
+        get { UserDefaults.standard.string(forKey: asrEngineKey) ?? "parakeet" }
+        set { UserDefaults.standard.set(newValue, forKey: asrEngineKey) }
     }
 
     /// Diarize the microphone into multiple speakers (for in-room recordings)

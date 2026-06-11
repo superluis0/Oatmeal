@@ -123,7 +123,10 @@ final class RecordingCoordinator {
             phase = .error(error.localizedDescription)
             return
         }
-        captureWarning = engine.systemCaptureWarning
+        // Surface either warning; the engine-fallback note (Nemotron → Parakeet)
+        // is non-fatal and the recording proceeds normally.
+        let engineNote = await transcription.takeLiveEngineNote()
+        captureWarning = engine.systemCaptureWarning ?? engineNote
 
         let meeting = Meeting(title: defaultTitle())
         context.insert(meeting)

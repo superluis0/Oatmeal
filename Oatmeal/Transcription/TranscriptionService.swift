@@ -22,13 +22,20 @@ struct LiveUpdate: Sendable {
     let text: String
 }
 
-/// Wraps FluidAudio ASR (Parakeet): real-time sliding-window streaming for live
-/// captions, plus an offline speaker-diarized pass for the final transcript.
+/// Wraps FluidAudio ASR: real-time streaming for live captions (Parakeet
+/// sliding-window by default, or Nemotron streaming when enabled in Settings),
+/// plus an offline speaker-diarized Parakeet pass for the final transcript.
 actor TranscriptionService {
 
     enum ServiceError: LocalizedError {
         case notReady
-        var errorDescription: String? { "Speech models are not loaded yet." }
+        case noSpeech
+        var errorDescription: String? {
+            switch self {
+            case .notReady: return "Speech models are not loaded yet."
+            case .noSpeech: return "No speech was heard on the mic or in system audio. Check your microphone in Settings → Audio."
+            }
+        }
     }
 
     private var models: AsrModels?
@@ -43,6 +50,57 @@ actor TranscriptionService {
     nonisolated(unsafe) private var micFeed: AsyncStream<[Float]>.Continuation?
     nonisolated(unsafe) private var systemFeed: AsyncStream<[Float]>.Continuation?
     private var updateFeed: AsyncStream<LiveUpdate>.Continuation?
+
+    // Nemotron live engine (opt-in). Created per recording in `beginStreaming`
+    // and torn down in `endStreaming` so the ~2× model memory is only held while
+    // actually recording. The FINAL transcript pass is always Parakeet + diarizer
+    // (FluidAudio's Nemotron is streaming-only), so these are additive.
+    private var nemotronMic: NemotronStream?
+    private var nemotronSystem: NemotronStream?
+    /// Non-fatal note when the chosen live engine couldn't start and we fell
+    /// back to Parakeet. Consumed once by the coordinator (→ captureWarning).
+    private var liveEngineNote: String?
+
+    /// One live Nemotron stream (mic or system), wrapping the English vs
+    /// multilingual manager variants behind a single feed/finish/cleanup surface.
+    private enum NemotronStream {
+        case english(StreamingNemotronAsrManager)
+        case multilingual(StreamingNemotronMultilingualAsrManager)
+
+        func setPartialCallback(_ callback: @escaping @Sendable (String) -> Void) async {
+            switch self {
+            case .english(let m): await m.setPartialCallback(callback)
+            case .multilingual(let m): await m.setPartialCallback(callback)
+            }
+        }
+
+        /// Feeds 16 kHz mono samples; the managers buffer internally and emit
+        /// running text via the partial callback as each chunk completes.
+        func feed(_ samples: [Float], format: AVAudioFormat) async throws {
+            switch self {
+            case .english(let m):
+                guard let buffer = TranscriptionService.makeBuffer(samples, format: format) else { return }
+                _ = try await m.process(audioBuffer: buffer)
+            case .multilingual(let m):
+                _ = try await m.process(samples: samples)
+            }
+        }
+
+        /// Flushes the buffered tail and returns the complete running transcript.
+        func finishText() async -> String? {
+            switch self {
+            case .english(let m): return try? await m.finish()
+            case .multilingual(let m): return try? await m.finish()
+            }
+        }
+
+        func cleanup() async {
+            switch self {
+            case .english(let m): await m.cleanup()
+            case .multilingual(let m): await m.cleanup()
+            }
+        }
+    }
 
     // Parakeet v2 uses blank token id 1024 (v3 default is 8192). Tuned for snappier
     // captions than the stock `.streaming` preset: shorter chunk + lookahead and a
@@ -109,9 +167,112 @@ actor TranscriptionService {
 
     // MARK: - Live streaming captions
 
-    /// Starts two sliding-window ASR streams (mic → "Me", system → "Others") and
-    /// returns a stream of running-text updates. Feed audio via `feedMic`/`feedSystem`.
+    /// Starts two live ASR streams (mic → "Me", system → "Others") and returns a
+    /// stream of running-text updates. Feed audio via `feedMic`/`feedSystem`.
+    ///
+    /// The engine is read from Settings per recording: Parakeet (default) or
+    /// Nemotron streaming. A Nemotron failure (first-run download interrupted,
+    /// Intel Mac, bad cache) falls back to Parakeet with a note — choosing the
+    /// new engine must never cost the user a recording.
     func beginStreaming() async throws -> AsyncStream<LiveUpdate> {
+        if AppSettings.asrEngine == "nemotron" {
+            do {
+                return try await beginNemotronStreaming()
+            } catch {
+                Log.error("Nemotron live engine failed, falling back to Parakeet: \(error.localizedDescription)", "transcription")
+                liveEngineNote = "Nemotron live captions couldn't start — using Parakeet for this recording."
+                await teardownNemotron()
+            }
+        }
+        return try await beginParakeetStreaming()
+    }
+
+    /// The chosen live engine couldn't start and we fell back? Returns the
+    /// user-facing note once, then clears it.
+    func takeLiveEngineNote() -> String? {
+        defer { liveEngineNote = nil }
+        return liveEngineNote
+    }
+
+    /// Nemotron chunk tiers: English uses the trained 1120 ms chunk (snappier
+    /// captions); multilingual uses 2240 ms, which CJK languages require.
+    private static let nemotronEnglishChunk = NemotronChunkSize.ms1120
+    private static let nemotronMultilingualChunkMs = 2240
+
+    /// Live captions via Nemotron streaming (downloads the model on first use,
+    /// then loads from the local FluidAudio cache — no network afterwards).
+    private func beginNemotronStreaming() async throws -> AsyncStream<LiveUpdate> {
+        let mic: NemotronStream
+        let sys: NemotronStream
+        if AppSettings.modelVersion == "v3" {
+            // One download serves both stream instances.
+            let dir = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
+                languageCode: "auto", chunkMs: Self.nemotronMultilingualChunkMs)
+            let micManager = StreamingNemotronMultilingualAsrManager()
+            try await micManager.loadModels(from: dir)
+            let sysManager = StreamingNemotronMultilingualAsrManager()
+            try await sysManager.loadModels(from: dir)
+            mic = .multilingual(micManager)
+            sys = .multilingual(sysManager)
+        } else {
+            let micManager = StreamingNemotronAsrManager(requestedChunkSize: Self.nemotronEnglishChunk)
+            try await micManager.loadModels()
+            let sysManager = StreamingNemotronAsrManager(requestedChunkSize: Self.nemotronEnglishChunk)
+            try await sysManager.loadModels()
+            mic = .english(micManager)
+            sys = .english(sysManager)
+        }
+        self.nemotronMic = mic
+        self.nemotronSystem = sys
+
+        let (micIn, micCont) = AsyncStream<[Float]>.makeStream()
+        let (sysIn, sysCont) = AsyncStream<[Float]>.makeStream()
+        self.micFeed = micCont
+        self.systemFeed = sysCont
+
+        let (updates, updateCont) = AsyncStream<LiveUpdate>.makeStream()
+        self.updateFeed = updateCont
+
+        // Running text arrives via the partial callbacks as chunks complete.
+        await mic.setPartialCallback { text in
+            updateCont.yield(LiveUpdate(source: .me, text: text))
+        }
+        await sys.setPartialCallback { text in
+            updateCont.yield(LiveUpdate(source: .others, text: text))
+        }
+
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+        let micFeeder = Task {
+            var warned = false
+            for await samples in micIn {
+                do { try await mic.feed(samples, format: format) } catch {
+                    if !warned { Log.error("Nemotron mic feed error: \(error.localizedDescription)", "transcription"); warned = true }
+                }
+            }
+        }
+        let sysFeeder = Task {
+            var warned = false
+            for await samples in sysIn {
+                do { try await sys.feed(samples, format: format) } catch {
+                    if !warned { Log.error("Nemotron system feed error: \(error.localizedDescription)", "transcription"); warned = true }
+                }
+            }
+        }
+
+        streamTasks = [micFeeder, sysFeeder]
+        Log.info("live engine: nemotron (\(AppSettings.modelVersion == "v3" ? "multilingual" : "english"))", "transcription")
+        return updates
+    }
+
+    private func teardownNemotron() async {
+        await nemotronMic?.cleanup()
+        await nemotronSystem?.cleanup()
+        nemotronMic = nil
+        nemotronSystem = nil
+    }
+
+    /// Live captions via the proven Parakeet sliding-window streams.
+    private func beginParakeetStreaming() async throws -> AsyncStream<LiveUpdate> {
         guard let models else { throw ServiceError.notReady }
 
         let config = streamConfig
@@ -175,12 +336,21 @@ actor TranscriptionService {
     func endStreaming() async {
         micFeed?.finish()
         systemFeed?.finish()
+        // Flush the Nemotron tails (buffered partial chunks) into the update
+        // stream before closing it, so the last words spoken still appear.
+        if let mic = nemotronMic, let text = await mic.finishText(), !text.isEmpty {
+            updateFeed?.yield(LiveUpdate(source: .me, text: text))
+        }
+        if let sys = nemotronSystem, let text = await sys.finishText(), !text.isEmpty {
+            updateFeed?.yield(LiveUpdate(source: .others, text: text))
+        }
         updateFeed?.finish()
         updateFeed = nil
         _ = try? await micStream?.finish()
         _ = try? await systemStream?.finish()
         await micStream?.cleanup()
         await systemStream?.cleanup()
+        await teardownNemotron()
         for task in streamTasks { task.cancel() }
         streamTasks.removeAll()
         micStream = nil
@@ -237,34 +407,50 @@ actor TranscriptionService {
         }
 
         // Microphone => "Me" normally, or diarized speakers when in-person mode is on.
+        // A silent source throws noSpeechDetected from the diarizer — that's normal
+        // (e.g. solo recordings have a silent system stream) and must never fail the
+        // OTHER source's transcript, so each source is diarized independently.
         var micSegments: [LiveSegment] = []
         if micSamples.count > 1_600 {
-            let micResult = try await micDiar.process(audio: micSamples)
-            for turn in micResult.segments {
-                let speaker = inPerson ? label(for: "mic-\(turn.speakerId)") : "Me"
-                if let seg = try await transcribeTurn(
-                    asr: asr, samples: micSamples,
-                    start: Double(turn.startTimeSeconds), end: Double(turn.endTimeSeconds),
-                    speaker: speaker
-                ) {
-                    micSegments.append(seg)
+            do {
+                let micResult = try await micDiar.process(audio: micSamples)
+                for turn in micResult.segments {
+                    let speaker = inPerson ? label(for: "mic-\(turn.speakerId)") : "Me"
+                    if let seg = try await transcribeTurn(
+                        asr: asr, samples: micSamples,
+                        start: Double(turn.startTimeSeconds), end: Double(turn.endTimeSeconds),
+                        speaker: speaker
+                    ) {
+                        micSegments.append(seg)
+                    }
                 }
+            } catch OfflineDiarizationError.noSpeechDetected {
+                Log.info("mic stream: no speech detected (silent source)", "transcription")
             }
         }
 
         // System => Speaker N
         var sysSegments: [LiveSegment] = []
         if systemSamples.count > 1_600 {
-            let sysResult = try await sysDiar.process(audio: systemSamples)
-            for turn in sysResult.segments {
-                if let seg = try await transcribeTurn(
-                    asr: asr, samples: systemSamples,
-                    start: Double(turn.startTimeSeconds), end: Double(turn.endTimeSeconds),
-                    speaker: label(for: "sys-\(turn.speakerId)")
-                ) {
-                    sysSegments.append(seg)
+            do {
+                let sysResult = try await sysDiar.process(audio: systemSamples)
+                for turn in sysResult.segments {
+                    if let seg = try await transcribeTurn(
+                        asr: asr, samples: systemSamples,
+                        start: Double(turn.startTimeSeconds), end: Double(turn.endTimeSeconds),
+                        speaker: label(for: "sys-\(turn.speakerId)")
+                    ) {
+                        sysSegments.append(seg)
+                    }
                 }
+            } catch OfflineDiarizationError.noSpeechDetected {
+                Log.info("system stream: no speech detected (silent source)", "transcription")
             }
+        }
+
+        // Only when BOTH sources were silent is the recording genuinely empty.
+        guard !(micSegments.isEmpty && sysSegments.isEmpty) else {
+            throw ServiceError.noSpeech
         }
 
         // Acoustic-echo dedup: when recording without headphones, the other

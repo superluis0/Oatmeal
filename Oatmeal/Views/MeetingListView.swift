@@ -30,11 +30,16 @@ struct MeetingListView: View {
     @State private var newFolderName = ""
     @State private var folderTarget: Meeting?
 
+    /// Same key AppSettings.inPersonMode reads — @AppStorage keeps this control
+    /// and the Settings-window toggle in sync live.
+    @AppStorage("inPersonMode") private var inPersonMode = false
+
     var body: some View {
         VStack(spacing: 0) {
             brandHeader
             VStack(spacing: Theme.Space.xs) {
                 recordButton
+                meetingModePicker
                 HStack(spacing: Theme.Space.xs) {
                     SidebarChip(title: "Upcoming", systemImage: "calendar", action: onUpcoming)
                     SidebarChip(title: "Ask", systemImage: "sparkles", action: onAskOatmeal)
@@ -207,6 +212,24 @@ struct MeetingListView: View {
             active: coordinator.isRecording
         )
         .allowsHitTesting(false)
+    }
+
+    /// Online call vs in-person meeting. Front and center because it changes how
+    /// speakers are identified: in person, everyone shares the Mac's mic, so the
+    /// mic audio is diarized into multiple speakers instead of all being "Me".
+    /// Editable during a recording too — it's applied when the transcript is
+    /// finalized at stop, so a forgotten switch can still be fixed mid-meeting.
+    private var meetingModePicker: some View {
+        Picker("Meeting type", selection: $inPersonMode) {
+            Label("Online call", systemImage: "video").tag(false)
+            Label("In person", systemImage: "person.2").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .help(inPersonMode
+              ? "In person: everyone shares this Mac's mic, so it's split into separate speakers."
+              : "Online call: your mic is you; the other side comes in through system audio.")
     }
 
     // MARK: - Actions

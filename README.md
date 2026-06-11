@@ -15,7 +15,7 @@ Everything runs on your Mac. No cloud. No account. No bots in your meetings.</p>
   <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-F4B65C" />
 </p>
 
-<sub>Built with <a href="https://github.com/FluidInference/FluidAudio">FluidAudio</a> (Parakeet ASR + diarization), <a href="https://lmstudio.ai">LM Studio</a>, SwiftUI, and SwiftData</sub>
+<sub>Built with <a href="https://github.com/FluidInference/FluidAudio">FluidAudio</a> (Parakeet &amp; Nemotron ASR + diarization), <a href="https://lmstudio.ai">LM Studio</a>, SwiftUI, and SwiftData</sub>
 
 </div>
 
@@ -37,8 +37,9 @@ Everything runs on your Mac. No cloud. No account. No bots in your meetings.</p>
 
 ## ✨ Highlights
 
-- 🎙️ **One-click capture:** records the other participants (system audio) **and** your mic. No meeting bots, no invite links.
+- 🎙️ **One-click capture:** records the other participants (system audio) **and** your mic. No meeting bots, no invite links. Works for online calls **and** in-person meetings (a one-tap switch by the record button).
 - 🗣️ **Speaker-labeled transcripts:** on-device diarization, with editable names, merge, and re-identify.
+- ⚡ **Two transcription engines:** Parakeet (proven default) or NVIDIA's new **Nemotron streaming** model for live captions — swap anytime in Settings, both fully on-device.
 - ✍️ **Notes that write themselves:** jot a few words, and the local LLM turns them into clean, structured notes.
 - 🧠 **Summaries &amp; action items:** decisions, owners, numbers, and follow-ups, extracted automatically.
 - 💬 **Chat with a meeting:** ask anything, and hybrid semantic + keyword retrieval grounds every answer in *that* meeting.
@@ -121,6 +122,8 @@ Everything runs on your Mac. No cloud. No account. No bots in your meetings.</p>
 > **First-run downloads.** The FluidAudio Swift package is fetched automatically when you build.
 > The on-device speech models (Parakeet transcription + speaker-diarization weights, ~450 MB total)
 > download automatically the first time you record. After that, transcription runs fully offline.
+> Optional: switch live captions to NVIDIA's **Nemotron streaming** model in Settings →
+> Transcription (Apple Silicon, ~0.5 GB more on first use, also fully on-device).
 
 ### 1 · Start your local AI
 

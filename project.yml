@@ -6,8 +6,12 @@ options:
   createIntermediateGroups: true
 packages:
   FluidAudio:
+    # Pinned EXACTLY: Package.resolved is gitignored, so a `from:` range let the
+    # library drift silently between builds (0.15.x changed silent-audio
+    # diarization from "no segments" to throwing noSpeechDetected, breaking solo
+    # recordings until buildTranscript caught it). Upgrades should be deliberate.
     url: https://github.com/FluidInference/FluidAudio.git
-    from: "0.12.4"
+    exactVersion: "0.15.2"
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts.git
     from: "2.0.0"
@@ -21,8 +25,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.oatmeal.Oatmeal
         PRODUCT_NAME: Oatmeal
-        MARKETING_VERSION: "0.3.0"
-        CURRENT_PROJECT_VERSION: "3"
+        MARKETING_VERSION: "0.4.0"
+        CURRENT_PROJECT_VERSION: "4"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Oatmeal/Info.plist
         CODE_SIGN_ENTITLEMENTS: Oatmeal/Oatmeal.entitlements

@@ -15,7 +15,10 @@ struct SettingsView: View {
     @State private var preMeetingReminders: Bool = AppSettings.preMeetingReminders
     @State private var syncReminders: Bool = AppSettings.syncReminders
     @State private var modelVersion: String = AppSettings.modelVersion
-    @State private var inPersonMode: Bool = AppSettings.inPersonMode
+    @State private var asrEngine: String = AppSettings.asrEngine
+    // @AppStorage (not @State) so this stays live-synced with the sidebar's
+    // meeting-type picker, which writes the same key.
+    @AppStorage("inPersonMode") private var inPersonMode = false
     @State private var retentionDays: Int = AppSettings.audioRetentionDays
     @State private var audioSize: String = StorageManager.formattedAudioSize()
     @State private var liveAssist: Bool = AppSettings.liveAssistEnabled
@@ -199,14 +202,18 @@ struct SettingsView: View {
             }
 
             Section("Transcription") {
+                Picker("Live captions engine", selection: $asrEngine) {
+                    Text("Parakeet (proven)").tag("parakeet")
+                    Text("Nemotron streaming (new)").tag("nemotron")
+                }
+                .onChange(of: asrEngine) { _, new in AppSettings.asrEngine = new }
                 Picker("Language model", selection: $modelVersion) {
                     Text("English (fastest)").tag("v2")
                     Text("Multilingual").tag("v3")
                 }
                 .onChange(of: modelVersion) { _, new in AppSettings.modelVersion = new }
                 Toggle("In-person mode (diarize my mic into multiple speakers)", isOn: $inPersonMode)
-                    .onChange(of: inPersonMode) { _, new in AppSettings.inPersonMode = new }
-                Text("Multilingual uses Parakeet v3 (downloads on first use). In-person mode is for meetings where everyone shares your Mac's mic.")
+                Text("Engine changes apply to your next recording. Nemotron is NVIDIA's new streaming model: it runs fully on-device (Apple Silicon), downloads ~0.5 GB on first use, and if it can't start, the recording continues on Parakeet. The final transcript is always polished by the proven pipeline. In-person mode is for meetings where everyone shares your Mac's mic — also switchable right under the record button.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
