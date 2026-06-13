@@ -44,6 +44,7 @@ Everything runs on your Mac. No cloud. No account. No bots in your meetings.</p>
 - 🧠 **Summaries &amp; action items:** decisions, owners, numbers, and follow-ups, extracted automatically.
 - 💬 **Chat with a meeting:** ask anything, and hybrid semantic + keyword retrieval grounds every answer in *that* meeting.
 - 🌍 **Ask across everything:** query your whole history with tappable source citations.
+- 📋 **Prep before the call:** from Upcoming, confirm who's speaking (names + emails pulled from the invite), jot talking points, and see your history with these people — the roster pre-labels speakers and feeds recap emails once you record.
 - 🟢 **Live Assist:** when you're asked something, a discreet teleprompter near the top of your screen quietly suggests what to say next, in plain, spoken language. Built for interviews and sales.
 - 🪟 **Floats over your call:** the cue and your record controls stay above full-screen video calls (Zoom, Teams, Meet), always one glance away.
 - 🎬 **Alive, not flashy:** an audio-reactive record button and waveform, streaming notes, and tasteful motion throughout, all of it respecting Reduce Motion.
