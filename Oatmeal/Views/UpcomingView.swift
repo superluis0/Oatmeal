@@ -100,7 +100,7 @@ struct UpcomingView: View {
                     .font(.system(.headline))
                     .foregroundStyle(Theme.textPrimary)
                 if !meeting.attendees.isEmpty {
-                    Label(meeting.attendees.prefix(4).joined(separator: ", "),
+                    Label(meeting.attendeeNames.prefix(4).joined(separator: ", "),
                           systemImage: "person.2")
                         .font(.caption)
                         .foregroundStyle(Theme.textSecondary)

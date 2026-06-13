@@ -15,7 +15,7 @@ struct OatmealApp: App {
             Meeting.self, TranscriptSegment.self, Summary.self,
             Attendee.self, ChatMessage.self, Folder.self,
             CustomTemplate.self, Recipe.self, ChatSession.self, EmbeddingChunk.self,
-            ActionItem.self, Highlight.self
+            ActionItem.self, Highlight.self, MeetingPrep.self
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {

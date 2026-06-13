@@ -243,7 +243,7 @@ final class RecordingCoordinator {
         } catch {
             Log.error("summarization failed (transcript kept)", "summary", error)
             phase = .error("Transcript saved, but summary failed: \(error.localizedDescription)")
-            try? context.save()
+            SafeStore.save(context, "summary-failed")
             SemanticIndex(context: context).reindex(meeting)
             return false
         }
@@ -262,7 +262,7 @@ final class RecordingCoordinator {
         phase = .processing("Extracting action items…")
         await extractActionItems(for: meeting, context: context)
 
-        try? context.save()
+        SafeStore.save(context, "process-meeting")
         SemanticIndex(context: context).reindex(meeting)
         MCPExport.sync(context: context)
         StoreBackup.snapshot(context: context)
@@ -285,7 +285,7 @@ final class RecordingCoordinator {
             context.insert(item)
             item.meeting = meeting
         }
-        try? context.save()
+        SafeStore.save(context, "extract-action-items")
     }
 
     // MARK: - Import pre-recorded audio
@@ -337,14 +337,18 @@ final class RecordingCoordinator {
         phase = .idle
     }
 
-    /// If the number of diarized "Speaker N" labels matches the attendee count,
-    /// pre-fill display names from the calendar attendees (user can re-edit).
+    /// If the number of diarized "Speaker N" labels matches the expected-speaker
+    /// count, pre-fill display names from the attendees (user can re-edit).
+    /// The note-taker is excluded — their speech is already labeled "Me" — as are
+    /// attendees the prep roster marked as not speaking.
     private func autoNameSpeakers(_ meeting: Meeting, segments: [LiveSegment]) {
         let labels = Set(segments.map { $0.speaker }.filter { $0.hasPrefix("Speaker ") })
             .sorted { lhs, rhs in
                 (Int(lhs.dropFirst(8)) ?? 0) < (Int(rhs.dropFirst(8)) ?? 0)
             }
-        let names = meeting.attendees.map { $0.name }
+        let names = meeting.attendees
+            .filter { $0.expectedToSpeak && !$0.isSelf }
+            .map { $0.name }
         guard !labels.isEmpty, labels.count == names.count else { return }
         for (label, name) in zip(labels, names) {
             meeting.speakerNames[label] = name
@@ -360,7 +364,7 @@ final class RecordingCoordinator {
         let highlight = Highlight(time: elapsed)
         context.insert(highlight)
         highlight.meeting = meeting
-        try? context.save()
+        SafeStore.save(context, "mark-highlight")
         return true
     }
 
@@ -527,11 +531,7 @@ final class RecordingCoordinator {
               let event = calendar.currentOrUpcomingEvent() else { return }
         meeting.title = event.title
         meeting.calendarEventID = event.id
-        for name in event.attendees {
-            let attendee = Attendee(name: name)
-            context.insert(attendee)
-            attendee.meeting = meeting
-        }
+        seedAttendees(into: meeting, eventID: event.id, eventAttendees: event.attendees, context: context)
     }
 
     /// Seeds a new recording from a specific upcoming meeting the user chose
@@ -540,10 +540,48 @@ final class RecordingCoordinator {
     private func seed(from event: UpcomingMeeting, into meeting: Meeting, context: ModelContext) {
         meeting.title = event.title
         meeting.calendarEventID = event.id
-        for name in event.attendees {
-            let attendee = Attendee(name: name)
-            context.insert(attendee)
-            attendee.meeting = meeting
+        seedAttendees(into: meeting, eventID: event.id, eventAttendees: event.attendees, context: context)
+    }
+
+    /// The saved pre-meeting prep for a calendar event, if the user opened the
+    /// Prep sheet for it. Most recent wins should duplicates ever exist.
+    private func savedPrep(for eventID: String?, context: ModelContext) -> MeetingPrep? {
+        guard let eventID, !eventID.isEmpty else { return nil }
+        var descriptor = FetchDescriptor<MeetingPrep>(
+            predicate: #Predicate { $0.calendarEventID == eventID },
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        return try? context.fetch(descriptor).first
+    }
+
+    /// Creates the meeting's attendees, preferring the pre-meeting prep roster
+    /// (user-curated names, emails, who speaks) over the raw calendar invitees.
+    /// Prep talking points seed the raw notes so live enhancement and the final
+    /// summary pick them up.
+    private func seedAttendees(into meeting: Meeting, eventID: String?,
+                               eventAttendees: [EventAttendee], context: ModelContext) {
+        if let prep = savedPrep(for: eventID, context: context) {
+            for planned in prep.speakers {
+                let trimmed = planned.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                let attendee = Attendee(name: trimmed, email: planned.email)
+                attendee.expectedToSpeak = planned.willSpeak
+                attendee.isSelf = planned.isSelf
+                context.insert(attendee)
+                attendee.meeting = meeting
+            }
+            let notes = prep.prepNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !notes.isEmpty && meeting.notes.isEmpty {
+                meeting.notes = notes
+            }
+        } else {
+            for person in eventAttendees {
+                let attendee = Attendee(name: person.name, email: person.email)
+                attendee.isSelf = person.isSelf
+                context.insert(attendee)
+                attendee.meeting = meeting
+            }
         }
     }
 
@@ -575,10 +613,10 @@ final class RecordingCoordinator {
         }
     }
 
-    /// Upper-bound speaker hint for diarization, drawn from the calendar attendee
-    /// count (nil when unknown, so the diarizer auto-detects).
+    /// Upper-bound speaker hint for diarization, drawn from the attendees who
+    /// are expected to speak (nil when unknown, so the diarizer auto-detects).
     private func expectedSpeakerHint(for meeting: Meeting) -> Int? {
-        let n = meeting.attendees.count
+        let n = meeting.attendees.filter(\.expectedToSpeak).count
         return n >= 2 ? n : nil
     }
 
@@ -631,7 +669,7 @@ final class RecordingCoordinator {
         let newLabels = Set(segments.map { $0.speaker })
         meeting.speakerNames = meeting.speakerNames.filter { newLabels.contains($0.key) }
         autoNameSpeakers(meeting, segments: segments)
-        try? context.save()
+        SafeStore.save(context, "reidentify-speakers")
         SemanticIndex(context: context).reindex(meeting)
         phase = .idle
     }
@@ -656,10 +694,15 @@ final class RecordingCoordinator {
                 transcript: transcript, title: meeting.title,
                 attendees: meeting.attendeeNames, identity: identity)
             guard meeting.modelContext != nil else { phase = .idle; return }
-            if let old = meeting.summary { context.delete(old) }
+            // Point the meeting at the new summary BEFORE deleting the old one:
+            // the moment context.delete() runs, any in-flight view render that
+            // reads the old Summary's properties traps. Reordering keeps
+            // meeting.summary valid at every observable step.
+            let old = meeting.summary
             let summary = Summary(text: result.text, actionItems: result.actionItems, keyPoints: result.keyPoints)
             context.insert(summary)
             meeting.summary = summary
+            if let old { context.delete(old) }
             SafeStore.save(context, "resummarize")
             SemanticIndex(context: context).reindex(meeting)
             StoreBackup.snapshot(context: context)

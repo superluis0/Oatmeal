@@ -1,10 +1,19 @@
 import Foundation
 import EventKit
 
+/// An invitee on a calendar event, with the email parsed from EventKit's
+/// `mailto:` participant URL when present.
+struct EventAttendee: Hashable, Sendable {
+    let name: String
+    let email: String?
+    /// True when EventKit identifies this participant as the local user.
+    let isSelf: Bool
+}
+
 struct CalendarEventInfo: Sendable {
     let id: String
     let title: String
-    let attendees: [String]
+    let attendees: [EventAttendee]
     var startDate: Date = .now
 }
 
@@ -13,8 +22,10 @@ struct UpcomingMeeting: Identifiable, Sendable {
     let title: String
     let start: Date
     let end: Date
-    let attendees: [String]
+    let attendees: [EventAttendee]
     let joinURL: URL?
+
+    var attendeeNames: [String] { attendees.map(\.name) }
 }
 
 /// Thin EventKit wrapper: ask for calendar access and find the event happening
@@ -69,13 +80,40 @@ final class CalendarService {
         let inProgress = events.first { $0.startDate <= now && $0.endDate >= now }
         guard let event = inProgress ?? events.first else { return nil }
 
-        let names = (event.attendees ?? []).compactMap { $0.name }
         return CalendarEventInfo(
             id: event.eventIdentifier ?? UUID().uuidString,
             title: event.title ?? "Meeting",
-            attendees: names,
+            attendees: Self.eventAttendees(event),
             startDate: event.startDate
         )
+    }
+
+    /// Maps EventKit participants to attendees with names and emails. EventKit
+    /// exposes the email only through the participant's `mailto:` URL; a
+    /// participant with no display name falls back to the email's local part.
+    static func eventAttendees(_ event: EKEvent) -> [EventAttendee] {
+        (event.attendees ?? []).compactMap { participant in
+            var email: String?
+            let url = participant.url
+            if url.scheme?.lowercased() == "mailto" {
+                // A mailto: URL can carry headers (`?subject=…`) and multiple
+                // comma-separated recipients — keep only the first bare address.
+                var address = String(url.absoluteString.dropFirst("mailto:".count))
+                if let q = address.firstIndex(of: "?") { address = String(address[..<q]) }
+                if let comma = address.firstIndex(of: ",") { address = String(address[..<comma]) }
+                address = (address.removingPercentEncoding ?? address)
+                    .trimmingCharacters(in: .whitespaces)
+                if address.contains("@") { email = address.lowercased() }
+            }
+            var name = participant.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // Calendar sometimes uses the bare address as the display name; treat
+            // that like a missing name so we still derive something readable.
+            if name.isEmpty || name.lowercased() == email, let email {
+                name = String(email.prefix(while: { $0 != "@" }))
+            }
+            guard !name.isEmpty else { return nil }
+            return EventAttendee(name: name, email: email, isSelf: participant.isCurrentUser)
+        }
     }
 
     /// Upcoming *meetings* only — events with attendees or a video-call link,
@@ -111,7 +149,7 @@ final class CalendarService {
                     title: event.title ?? "Meeting",
                     start: event.startDate,
                     end: event.endDate,
-                    attendees: (event.attendees ?? []).compactMap { $0.name },
+                    attendees: Self.eventAttendees(event),
                     joinURL: meetingURL(event)
                 )
             }
@@ -128,7 +166,7 @@ final class CalendarService {
             title: event.title ?? "Meeting",
             start: event.startDate,
             end: event.endDate,
-            attendees: (event.attendees ?? []).compactMap { $0.name },
+            attendees: Self.eventAttendees(event),
             joinURL: meetingURL(event)
         )
     }
@@ -197,7 +235,7 @@ final class CalendarService {
                 CalendarEventInfo(
                     id: event.eventIdentifier ?? UUID().uuidString,
                     title: event.title ?? "Meeting",
-                    attendees: (event.attendees ?? []).compactMap { $0.name },
+                    attendees: Self.eventAttendees(event),
                     startDate: event.startDate
                 )
             }

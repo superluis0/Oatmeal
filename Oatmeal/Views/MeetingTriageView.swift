@@ -18,12 +18,21 @@ struct MeetingTriageView: View {
     private let steps = ["Review", "Tasks", "Recap"]
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider().overlay(Theme.hairline)
-            ScrollView { content.padding(Theme.Space.lg) }
-            Divider().overlay(Theme.hairline)
-            footer
+        Group {
+            // If the meeting is deleted out from under this sheet, reading its own
+            // attributes (e.g. `title` in the header) would trap — render nothing
+            // and dismiss, matching MeetingDetailView's guard.
+            if meeting.isDeleted || meeting.modelContext == nil {
+                Color.clear.onAppear { dismiss() }
+            } else {
+                VStack(spacing: 0) {
+                    header
+                    Divider().overlay(Theme.hairline)
+                    ScrollView { content.padding(Theme.Space.lg) }
+                    Divider().overlay(Theme.hairline)
+                    footer
+                }
+            }
         }
         .frame(width: 580, height: 580)
         .background(Theme.bg)
@@ -64,8 +73,8 @@ struct MeetingTriageView: View {
         VStack(alignment: .leading, spacing: Theme.Space.md) {
             Label("Does this summary look right?", systemImage: "doc.text")
                 .font(.system(.headline))
-            if meeting.modelContext != nil, let summary = meeting.summary,
-               summary.modelContext != nil, !summary.text.isEmpty {
+            if !meeting.isDeleted, meeting.modelContext != nil, let summary = meeting.summary,
+               !summary.isDeleted, summary.modelContext != nil, !summary.text.isEmpty {
                 MarkdownView(markdown: summary.text)
                 if !summary.keyPoints.isEmpty {
                     SectionLabel(text: "Key points")

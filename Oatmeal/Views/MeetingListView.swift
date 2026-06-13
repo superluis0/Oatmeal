@@ -15,6 +15,11 @@ struct MeetingListView: View {
     var onUpcoming: () -> Void
     var onDigest: () -> Void
     var onDecisions: () -> Void = {}
+    /// Owned by ContentView so every delete goes through the same soft-delete
+    /// (5-second undo window, logging, selection clearing). Deleting + saving
+    /// directly from here invalidates the model while the detail pane may still
+    /// be rendering it — the cause of a SwiftData deleted-object crash.
+    var onDelete: (Meeting) -> Void
     @Environment(\.modelContext) private var context
     @State private var updateChecker = UpdateChecker.shared
 
@@ -263,8 +268,7 @@ struct MeetingListView: View {
     }
 
     private func delete(_ meeting: Meeting) {
-        if selection?.persistentModelID == meeting.persistentModelID { selection = nil }
-        MeetingStore.delete(meeting, context: context)
+        onDelete(meeting)
     }
 
     private func delete(at offsets: IndexSet, in list: [Meeting]) {

@@ -18,9 +18,11 @@ enum MeetingStore {
             for chunk in chunks { context.delete(chunk) }
         }
 
-        // Cascades segments / attendees / chatMessages / summary.
+        // Cascades segments / attendees / chatMessages / summary. Saving a
+        // cascade delete is exactly the case that can raise an uncatchable ObjC
+        // exception, so go through SafeStore rather than `try?`.
         context.delete(meeting)
-        try? context.save()
+        SafeStore.save(context, "delete-meeting")
         MCPExport.sync(context: context)
     }
 }

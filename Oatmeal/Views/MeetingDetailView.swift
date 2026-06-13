@@ -308,7 +308,9 @@ struct MeetingDetailView: View {
         // Defense in depth: if this meeting was deleted out from under the view,
         // render nothing rather than read a dead SwiftData object during a layout
         // pass (which traps). Pairs with the selection-clearing in ContentView.
-        if meeting.modelContext == nil {
+        // `isDeleted` covers the window between context.delete() and save();
+        // `modelContext == nil` covers after the save commits.
+        if meeting.isDeleted || meeting.modelContext == nil {
             Color.clear
         } else {
             content
@@ -317,6 +319,21 @@ struct MeetingDetailView: View {
 
     private var content: some View {
         ScrollViewReader { proxy in
+            // The guard in `body` is not enough on its own: SwiftUI's observation
+            // system re-runs THIS closure directly when an observed property of
+            // `meeting` changes (a delete committing counts), without re-evaluating
+            // `body` or the parent container's @Query first. In that window,
+            // building the sections below reads faulted attributes (e.g. `tags`)
+            // of a detached model, which traps deep in SwiftData.
+            if meeting.isDeleted || meeting.modelContext == nil {
+                Color.clear
+            } else {
+                scrollContent(proxy: proxy)
+            }
+        }
+    }
+
+    private func scrollContent(proxy: ScrollViewProxy) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.lg) {
                 titleSection
@@ -464,7 +481,6 @@ struct MeetingDetailView: View {
                 withAnimation(.easeInOut(duration: 0.4)) { proxy.scrollTo(target, anchor: .center) }
             }
         }
-        } // ScrollViewReader
     }
 
     /// The active tab's content, cross-faded when `tab` changes. Each heavy tab
@@ -605,9 +621,13 @@ struct MeetingDetailView: View {
     @ViewBuilder
     private var summarySection: some View {
         // Guard against a model that was deleted out from under the view (e.g. the
-        // meeting was removed while a sheet was closing) — reading a deleted
-        // SwiftData object's properties traps. modelContext is nil once deleted.
-        if meeting.modelContext != nil, let summary = meeting.summary, summary.modelContext != nil {
+        // meeting was removed while a sheet was closing, or regenerateSummary
+        // deleted the old Summary) — reading a deleted SwiftData object's
+        // properties traps. `isDeleted` covers the window between
+        // context.delete() and save(); `modelContext == nil` covers after the
+        // save commits.
+        if !meeting.isDeleted, meeting.modelContext != nil,
+           let summary = meeting.summary, !summary.isDeleted, summary.modelContext != nil {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     if !summary.text.isEmpty {

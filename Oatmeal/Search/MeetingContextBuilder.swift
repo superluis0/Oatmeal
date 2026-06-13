@@ -85,9 +85,12 @@ enum MeetingContextBuilder {
                 return (chunk, lex, lex * 1.5 + sem)
             }
 
-            // 1) Unconditionally include every chunk that lexically matches the
-            //    question — that's where the literal answer lives.
-            let lexicalHits = scored.filter { $0.lex > 0 }.map { $0.chunk }
+            // 1) Prioritize chunks that lexically match the question — that's where
+            //    the literal answer lives — strongest matches first so that if a
+            //    query matches more than fits, the best ones win.
+            let lexicalHits = scored.filter { $0.lex > 0 }
+                .sorted { $0.lex > $1.lex }
+                .map { $0.chunk }
             // 2) Fill the rest of the budget with the best-scoring remaining chunks.
             let hitIDs = Set(lexicalHits.map { $0.persistentModelID })
             let rest = scored
@@ -95,12 +98,21 @@ enum MeetingContextBuilder {
                 .sorted { $0.total > $1.total }
                 .map { $0.chunk }
 
+            // Lexical hits may exceed the soft budget (the comment promises they
+            // aren't budgeted out), but a hard ceiling stops a query that matches
+            // most of the transcript from reassembling the whole thing and
+            // overflowing a small local context window. A single oversized first
+            // chunk is still kept so the answer is never empty.
+            let hardCap = transcriptBudget * 2
             var picked: [EmbeddingChunk] = []
             var used = 0
-            for chunk in lexicalHits + rest {
-                if used > 0 && used + chunk.text.count > transcriptBudget && !lexicalHits.contains(where: { $0.persistentModelID == chunk.persistentModelID }) {
-                    continue
-                }
+            for chunk in lexicalHits {
+                if used > 0 && used + chunk.text.count > hardCap { break }
+                picked.append(chunk)
+                used += chunk.text.count
+            }
+            for chunk in rest {
+                if used > 0 && used + chunk.text.count > transcriptBudget { continue }
                 picked.append(chunk)
                 used += chunk.text.count
             }

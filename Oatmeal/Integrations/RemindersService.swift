@@ -54,8 +54,16 @@ enum RemindersService {
             reminder.dueDateComponents = Calendar.current.dateComponents(
                 [.year, .month, .day, .hour, .minute], from: due)
         }
-        try? store.save(reminder, commit: true)
-        return reminder.calendarItemIdentifier
+        // Only report the id on a successful save — otherwise the caller persists
+        // `reminderID` and treats the item as synced, so it's never retried even
+        // though no reminder was actually created.
+        do {
+            try store.save(reminder, commit: true)
+            return reminder.calendarItemIdentifier
+        } catch {
+            Log.error("failed to save reminder", "reminders", error)
+            return nil
+        }
     }
 }
 

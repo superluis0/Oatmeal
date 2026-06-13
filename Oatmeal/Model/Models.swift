@@ -196,6 +196,12 @@ final class Attendee {
     var email: String?
     /// Ties a diarized label ("Speaker 2") to this real person, when known.
     var mappedSpeakerLabel: String?
+    /// Whether this person is expected to speak (set during pre-meeting prep).
+    /// Non-speaking attendees are skipped when auto-naming diarized speakers.
+    var expectedToSpeak: Bool = true
+    /// True when this attendee is the note-taker — their speech is labeled "Me"
+    /// in the transcript, so they're excluded from "Speaker N" auto-naming.
+    var isSelf: Bool = false
     var meeting: Meeting?
 
     init(name: String, email: String? = nil, mappedSpeakerLabel: String? = nil) {
@@ -203,6 +209,49 @@ final class Attendee {
         self.email = email
         self.mappedSpeakerLabel = mappedSpeakerLabel
     }
+}
+
+/// A person expected in an upcoming meeting, set up in the pre-meeting Prep
+/// sheet before any recording exists.
+struct PlannedSpeaker: Codable, Hashable, Identifiable {
+    var id: UUID = UUID()
+    var name: String
+    var email: String?
+    /// True for the note-taker (matched from the calendar invite when possible).
+    var isSelf: Bool = false
+    /// Off for attendees who are invited but won't talk (rooms, FYI invitees) —
+    /// they're kept for follow-up emails but excluded from speaker matching.
+    var willSpeak: Bool = true
+}
+
+/// Pre-meeting preparation for a specific calendar event: who is expected to
+/// speak (with emails, for follow-ups) and talking points. Consumed by
+/// `RecordingCoordinator` when a recording for that event starts: the roster
+/// becomes the meeting's attendees, drives the diarization speaker-count hint
+/// and speaker auto-naming, and the notes seed the meeting's raw notes.
+@Model
+final class MeetingPrep {
+    /// EventKit event identifier this prep belongs to. One prep per event.
+    var calendarEventID: String
+    var title: String
+    var eventStart: Date
+    /// Talking points / agenda, copied into the meeting's notes at record start.
+    var prepNotes: String
+    var speakers: [PlannedSpeaker]
+    var updatedAt: Date
+
+    init(calendarEventID: String, title: String, eventStart: Date,
+         prepNotes: String = "", speakers: [PlannedSpeaker] = [], updatedAt: Date = .now) {
+        self.calendarEventID = calendarEventID
+        self.title = title
+        self.eventStart = eventStart
+        self.prepNotes = prepNotes
+        self.speakers = speakers
+        self.updatedAt = updatedAt
+    }
+
+    /// The people expected to actually talk, in roster order.
+    var speakingRoster: [PlannedSpeaker] { speakers.filter(\.willSpeak) }
 }
 
 @Model

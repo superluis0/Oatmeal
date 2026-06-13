@@ -33,7 +33,7 @@ enum StorageManager {
            let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
             for url in items { try? FileManager.default.removeItem(at: url) }
         }
-        try? context.save()
+        SafeStore.save(context, "delete-all-audio")
     }
 
     /// Prune audio older than the retention setting (0 = keep forever).
@@ -47,6 +47,6 @@ enum StorageManager {
             meeting.audioPath = nil
             changed = true
         }
-        if changed { try? context.save() }
+        if changed { SafeStore.save(context, "prune-old-audio") }
     }
 }

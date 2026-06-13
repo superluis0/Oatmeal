@@ -86,7 +86,8 @@ struct ContentView: View {
                 onTasks: { resetDestinations(); showTasks = true },
                 onUpcoming: { resetDestinations(); showUpcoming = true },
                 onDigest: { resetDestinations(); showDigest = true },
-                onDecisions: { resetDestinations(); showDecisions = true }
+                onDecisions: { resetDestinations(); showDecisions = true },
+                onDelete: requestDelete
             )
             .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 360)
             .searchable(text: $searchText, placement: .sidebar, prompt: "Search meetings")
@@ -312,6 +313,12 @@ struct ContentView: View {
         Log.info("delete requested: \(meeting.title)", "store")
         if selection?.id == meeting.id { selection = nil }
         deleteTask?.cancel()
+        // If another meeting is still waiting out its undo window, commit it now
+        // rather than letting the cancel-and-overwrite below drop it — otherwise
+        // the first meeting silently reappears (it was never actually deleted).
+        if let prior = pendingDelete, prior.id != meeting.id, prior.isAlive {
+            MeetingStore.delete(prior, context: context)
+        }
         withAnimation { pendingDelete = meeting }
         deleteTask = Task {
             do { try await Task.sleep(for: .seconds(5)) } catch { return } // cancelled (undo)
