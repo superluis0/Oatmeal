@@ -162,7 +162,9 @@ struct MeetingListView: View {
                 .foregroundStyle(Theme.textPrimary)
             Spacer()
             if let update = updateChecker.available {
-                Link(destination: update.url) {
+                Button {
+                    UpdateChecker.shared.checkForUpdates()
+                } label: {
                     Label("Update", systemImage: "arrow.down.circle.fill")
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 8).padding(.vertical, 3)
@@ -171,7 +173,7 @@ struct MeetingListView: View {
                 }
                 .buttonStyle(.plain)
                 .updatePulse()
-                .help("Oatmeal \(update.version) is available — view the release")
+                .help("Oatmeal \(update.version) is available — click to install")
             }
         }
         .padding(.horizontal, Theme.Space.md)

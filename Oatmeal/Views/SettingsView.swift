@@ -290,10 +290,10 @@ struct SettingsView: View {
 
             Section("Updates") {
                 LabeledContent("Current version", value: updateChecker.currentVersion)
-                Toggle("Check GitHub for new releases", isOn: $checkForUpdates)
+                Toggle("Check for updates automatically", isOn: $checkForUpdates)
                     .onChange(of: checkForUpdates) { _, new in
-                        AppSettings.checkForUpdates = new
-                        if new { Task { await updateChecker.check() } }
+                        updateChecker.setAutomaticChecks(new)
+                        if new { updateChecker.checkForUpdates() }
                     }
                 if let update = updateChecker.available {
                     HStack {
@@ -301,12 +301,12 @@ struct SettingsView: View {
                             .foregroundStyle(Theme.accent)
                             .updatePulse()
                         Spacer()
-                        Link("View release", destination: update.url)
+                        Button("Install…") { updateChecker.checkForUpdates() }
                     }
                 } else {
                     HStack {
                         Button {
-                            Task { await updateChecker.check() }
+                            updateChecker.checkForUpdates()
                         } label: {
                             Label(updateChecker.isChecking ? "Checking…" : "Check now", systemImage: "arrow.clockwise")
                         }
@@ -315,7 +315,7 @@ struct SettingsView: View {
                         Text("You're up to date").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Text("Contacts api.github.com at most once a day to compare the latest release tag with your version. No data about you is sent. Turn off to keep Oatmeal fully offline.")
+                Text("Checks the Oatmeal release feed over HTTPS for a newer version and can install it in one click. No data about you is sent. Turn off to keep Oatmeal fully offline.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

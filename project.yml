@@ -15,6 +15,13 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts.git
     from: "2.0.0"
+  Sparkle:
+    # The de-facto macOS auto-updater. Pinned EXACTLY (Package.resolved is
+    # gitignored, so a range would drift silently between builds). 2.9.2 was the
+    # newest stable release public for >7 days when added (2.9.3 was 6 days old).
+    # Bump deliberately. See plans/015-one-click-updates-sparkle.md.
+    url: https://github.com/sparkle-project/Sparkle.git
+    exactVersion: "2.9.2"
 targets:
   Oatmeal:
     type: application
@@ -46,6 +53,8 @@ targets:
         product: FluidAudio
       - package: KeyboardShortcuts
         product: KeyboardShortcuts
+      - package: Sparkle
+        product: Sparkle
   OatmealMCP:
     type: tool
     platform: macOS

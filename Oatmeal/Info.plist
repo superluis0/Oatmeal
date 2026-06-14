@@ -36,5 +36,15 @@
 	<true/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
+	<!-- Sparkle auto-updater. Appcast served over HTTPS from GitHub Pages
+	     (docs/appcast.xml). SUPublicEDKey is the public half of the EdDSA key
+	     whose private half lives in the release machine's Keychain; Sparkle
+	     verifies every update against it. plans/015-one-click-updates-sparkle.md -->
+	<key>SUFeedURL</key>
+	<string>https://superluis0.github.io/Oatmeal/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>z8Wip8HXiwv1Jg1OyCAORHDvtUUZDju7Sl0KOfEwk6Q=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>

@@ -28,6 +28,10 @@ Package.resolved
 /Oatmeal.app
 /Oatmeal*.app
 
+# Release build artifacts (signed zips). The appcast in docs/ IS committed; the
+# binaries are uploaded to GitHub Releases, not git. See release.sh.
+/dist/
+
 # Local tooling / editor config
 .claude/
 .vscode/

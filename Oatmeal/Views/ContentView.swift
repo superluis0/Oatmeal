@@ -206,7 +206,7 @@ struct ContentView: View {
                 crashNotice = crash
                 Log.lastCrashReport = nil
             }
-            Task { await UpdateChecker.shared.checkIfDue() }
+            UpdateChecker.shared.checkIfDue()
         }
         .onDisappear { detector.stopMonitoring() }
         .alert("Oatmeal quit unexpectedly last time", isPresented: Binding(

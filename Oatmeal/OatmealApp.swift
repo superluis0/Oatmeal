@@ -48,6 +48,11 @@ struct OatmealApp: App {
         .defaultSize(width: 1200, height: 800)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            // Standard "Check for Updates…" under the app menu — drives Sparkle's
+            // one-click install flow (see UpdateChecker).
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { UpdateChecker.shared.checkForUpdates() }
+            }
         }
 
         MenuBarExtra {
@@ -67,6 +72,9 @@ struct OatmealApp: App {
         guard !shortcutsRegistered else { return }
         shortcutsRegistered = true
         let container = sharedModelContainer
+
+        // Start Sparkle's updater so automatic checks are scheduled from launch.
+        UpdateChecker.shared.startUpdater()
 
         // Pre-meeting notifications → start recording on tap. Record the SPECIFIC
         // meeting the reminder was for (resolved from its event id), not whichever
