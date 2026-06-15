@@ -55,10 +55,6 @@ enum Theme {
     static let success = Color.adaptive(light: 0x5C9A6B, dark: 0x79B889)
 
     // Gradients
-    static let heroGradient = LinearGradient(
-        colors: [Color(hex: 0xF4B65C), Color(hex: 0xE08A3C)],
-        startPoint: .topLeading, endPoint: .bottomTrailing
-    )
     static var accentGradient: LinearGradient { Appearance.shared.accent.gradient }
     static let recordGradient = LinearGradient(
         colors: [Color(hex: 0xE2654E), Color(hex: 0xC9463A)],
@@ -72,7 +68,6 @@ enum Theme {
         static let md: CGFloat = 16
         static let lg: CGFloat = 24
         static let xl: CGFloat = 32
-        static let xxl: CGFloat = 48
     }
 
     enum Radius {

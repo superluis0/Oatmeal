@@ -249,9 +249,6 @@ final class MeetingPrep {
         self.speakers = speakers
         self.updatedAt = updatedAt
     }
-
-    /// The people expected to actually talk, in roster order.
-    var speakingRoster: [PlannedSpeaker] { speakers.filter(\.willSpeak) }
 }
 
 @Model
