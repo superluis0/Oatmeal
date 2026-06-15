@@ -70,10 +70,18 @@ final class LiveHUDController {
     /// Centered horizontally, near the top of the screen — close to the eyeline of a
     /// video call so glancing at it looks like looking at the person.
     private func positionTopCenter(_ panel: NSPanel) {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = Self.activeScreen() else { return }
         let v = screen.visibleFrame
         let size = panel.frame.size
         panel.setFrameOrigin(NSPoint(x: v.midX - size.width / 2, y: v.maxY - size.height - 16))
+    }
+
+    /// The display the user is most likely looking at — the one under the pointer —
+    /// so the cue lands on the right screen during a call on a multi-monitor setup,
+    /// not always the system's "main" screen.
+    private static func activeScreen() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
     }
 }
 
@@ -95,6 +103,30 @@ struct LiveHUDView: View {
     /// pill — the resting state now that cues are on-demand only.
     enum Drawer { case suggestion, notes }
     @State private var drawer: Drawer?
+
+    /// One-shot guard so the post-save auto-dismiss fires once per recording.
+    @State private var didScheduleDismiss = false
+
+    /// What the strip should present, derived from the coordinator's phase. The
+    /// panel mirrors the meeting lifecycle so STOP — and failures — are never
+    /// silent, especially when the main window is closed and the panel is the
+    /// only surface the user can see.
+    enum PanelState: Equatable {
+        case preparing
+        case recording
+        case processing(String)
+        case finished
+        case failed(String)
+    }
+    private var panelState: PanelState {
+        switch coordinator.phase {
+        case .preparingModels: return .preparing
+        case .recording: return .recording
+        case .processing(let message): return .processing(message)
+        case .error(let message): return .failed(message)
+        case .idle: return .finished
+        }
+    }
 
     private var notes: Binding<String> {
         Binding(
@@ -132,7 +164,8 @@ struct LiveHUDView: View {
                 // from *under* the strip rather than over it.
                 .zIndex(1)
 
-            if let drawer {
+            // The cue/notes drawer only belongs to an *active* recording.
+            if let drawer, coordinator.isRecording {
                 drawerView(drawer)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -141,14 +174,49 @@ struct LiveHUDView: View {
         // to its top so the strip sits at a fixed eyeline and only the drawer moves.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .motion(Motion.gentle(reduceMotion), value: drawer)
+        .motion(Motion.gentle(reduceMotion), value: panelState)
+        // The moment recording ends, close any open drawer: notes must not be
+        // typed into a meeting that's being torn down/processed (silent loss),
+        // and a stale cue shouldn't hover over the wrap-up state.
+        .onChange(of: coordinator.isRecording) { _, recording in
+            if !recording { withAnimation(Motion.gentle(reduceMotion)) { drawer = nil } }
+        }
+        // Mirror the lifecycle: reset the dismiss guard when a new recording
+        // starts, and tuck the panel away shortly after the meeting saves so it
+        // doesn't linger as a dead strip.
+        .onChange(of: panelState) { _, state in
+            switch state {
+            case .recording: didScheduleDismiss = false
+            case .finished: scheduleAutoDismiss()
+            default: break
+            }
+        }
         .fontDesign(Appearance.shared.fontDesign)
     }
 
     // MARK: - The strip
 
-    /// The always-visible teleprompter pill: pulsing dot + timer, the live
-    /// waveform as the centerpiece, and the three actions.
-    private var strip: some View {
+    /// What the pill shows depends on where the meeting is in its lifecycle, so
+    /// pressing Stop (and any failure) is reflected on the panel itself — not only
+    /// in the main window, which may be closed.
+    @ViewBuilder private var strip: some View {
+        switch panelState {
+        case .recording:
+            recordingStrip
+        case .preparing:
+            statusStrip(message: "Starting…", spinning: true)
+        case .processing(let message):
+            statusStrip(message: message, spinning: true)
+        case .finished:
+            statusStrip(message: "Saved", icon: "checkmark.circle.fill", tint: Theme.success)
+        case .failed(let message):
+            errorStrip(message: message)
+        }
+    }
+
+    /// The active-recording pill: pulsing dot + timer, the live waveform as the
+    /// centerpiece, and the three actions.
+    private var recordingStrip: some View {
         HStack(spacing: Theme.Space.sm) {
             PulsingDot()
             Text(timeString(coordinator.elapsed))
@@ -190,6 +258,7 @@ struct LiveHUDView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous))
     }
 
+    /// Recording-only controls: notes toggle, open-app, hide.
     private var utilities: some View {
         HStack(spacing: Theme.Space.xs) {
             Button {
@@ -198,20 +267,96 @@ struct LiveHUDView: View {
                 Image(systemName: drawer == .notes ? "note.text.badge.plus" : "note.text")
             }
             .help(drawer == .notes ? "Hide notes" : "Jot a private note")
-            Button {
-                NSApp.activate(ignoringOtherApps: true)
-            } label: {
-                Image(systemName: "macwindow")
-            }
-            .help("Bring Oatmeal's main window forward")
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-            }
-            .help("Hide the floating panel")
+            windowButton
+            closeButton
         }
         .buttonStyle(.plain)
         .font(.callout)
         .foregroundStyle(Theme.textTertiary)
+    }
+
+    /// Controls for the non-recording states: open-app, hide.
+    private var compactUtilities: some View {
+        HStack(spacing: Theme.Space.xs) {
+            windowButton
+            closeButton
+        }
+        .buttonStyle(.plain)
+        .font(.callout)
+        .foregroundStyle(Theme.textTertiary)
+    }
+
+    /// Reliably reopens the main window even if it was closed (NSApp.activate
+    /// alone can't recreate a closed SwiftUI window — see MainWindowAccess).
+    private var windowButton: some View {
+        Button { MainWindowAccess.shared.show() } label: {
+            Image(systemName: "macwindow")
+        }
+        .help("Bring Oatmeal's main window forward")
+    }
+
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark")
+        }
+        .help("Hide the floating panel")
+    }
+
+    // MARK: - Non-recording strips
+
+    /// A compact status row (preparing / processing / saved): the wrap-up message
+    /// plus the open-app / hide controls. No pulse, no waveform, no
+    /// Mark/Suggest/Stop — those only make sense while actually recording.
+    private func statusStrip(message: String, icon: String? = nil,
+                             spinning: Bool = false, tint: Color = Theme.textSecondary) -> some View {
+        HStack(spacing: Theme.Space.sm) {
+            if spinning {
+                ProgressView().controlSize(.small)
+            } else if let icon {
+                Image(systemName: icon).foregroundStyle(tint)
+            }
+            Text(message)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            compactUtilities
+        }
+        .padding(.horizontal, Theme.Space.md)
+        .padding(.vertical, Theme.Space.xs + 2)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous))
+    }
+
+    /// Recording failed (e.g. a silent call). Surface it on the panel with a way
+    /// to jump to the app, instead of leaving a frozen "recording" strip.
+    private func errorStrip(message: String) -> some View {
+        HStack(spacing: Theme.Space.sm) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.danger)
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Open Oatmeal") { MainWindowAccess.shared.show() }
+                .buttonStyle(OatSecondaryButton())
+            closeButton
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.textTertiary)
+        }
+        .padding(.horizontal, Theme.Space.md)
+        .padding(.vertical, Theme.Space.xs + 2)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.xl, style: .continuous))
+    }
+
+    /// After the meeting saves, briefly show "Saved", then hide the panel so it
+    /// doesn't linger as a dead strip. Fires once per recording.
+    private func scheduleAutoDismiss() {
+        guard !didScheduleDismiss else { return }
+        didScheduleDismiss = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            onClose()
+        }
     }
 
     // MARK: - The drawer

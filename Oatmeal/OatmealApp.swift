@@ -2,12 +2,18 @@ import SwiftUI
 import SwiftData
 import KeyboardShortcuts
 import UserNotifications
+import AppKit
 
 @main
 struct OatmealApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var coordinator = RecordingCoordinator()
     @State private var detector = MeetingDetector()
     @State private var shortcutsRegistered = false
+
+    /// Stable id for the main window so the floating panel can reopen it after
+    /// it's been closed.
+    static let mainWindowID = "main"
 
     var sharedModelContainer: ModelContainer = {
         Log.start()
@@ -39,7 +45,9 @@ struct OatmealApp: App {
     }()
 
     var body: some Scene {
-        WindowGroup {
+        // A single, addressable main window (not a WindowGroup) so it can be
+        // reopened by id after the user closes it — e.g. from the floating panel.
+        Window("Oatmeal", id: Self.mainWindowID) {
             RootView(coordinator: coordinator, detector: detector)
                 .background(WindowConfigurator())
                 .onAppear { registerShortcuts() }
@@ -72,6 +80,11 @@ struct OatmealApp: App {
         guard !shortcutsRegistered else { return }
         shortcutsRegistered = true
         let container = sharedModelContainer
+
+        // Let the AppKit delegate reach the coordinator/context so quitting
+        // mid-recording can stop and save first (see AppDelegate).
+        AppLifecycle.shared.coordinator = coordinator
+        AppLifecycle.shared.context = container.mainContext
 
         // Start Sparkle's updater so automatic checks are scheduled from launch.
         UpdateChecker.shared.startUpdater()
@@ -128,6 +141,69 @@ struct OatmealApp: App {
         }
         KeyboardShortcuts.onKeyUp(for: .markMoment) {
             Task { @MainActor in coordinator.markHighlight(context: container.mainContext) }
+        }
+    }
+}
+
+/// Bridges the SwiftUI coordinator/context to the AppKit `AppDelegate`, so a quit
+/// that lands mid-recording can stop and save first instead of dropping it.
+@MainActor
+final class AppLifecycle {
+    static let shared = AppLifecycle()
+    weak var coordinator: RecordingCoordinator?
+    var context: ModelContext?
+    private init() {}
+}
+
+/// Reopens the main window on demand. `NSApp.activate` alone can't recreate a
+/// closed SwiftUI window, so the window's content registers a SwiftUI
+/// `openWindow` closure here that survives the window being closed.
+@MainActor
+final class MainWindowAccess {
+    static let shared = MainWindowAccess()
+    var openMain: (() -> Void)?
+    private init() {}
+
+    func show() {
+        NSApp.activate(ignoringOtherApps: true)
+        openMain?()
+    }
+}
+
+/// Guards against quitting mid-recording (or mid-processing) and silently losing
+/// the in-progress meeting — the floating panel makes it easy to ⌘Q with no main
+/// window in sight.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            guard let coord = AppLifecycle.shared.coordinator else { return .terminateNow }
+
+            if coord.isRecording {
+                let alert = NSAlert()
+                alert.messageText = "Oatmeal is still recording"
+                alert.informativeText = "Quitting will stop the recording and process this meeting first."
+                alert.addButton(withTitle: "Stop & Quit")
+                alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+                guard let ctx = AppLifecycle.shared.context else { return .terminateNow }
+                // Stop (which saves audio + runs processing), then let the quit proceed.
+                Task { @MainActor in
+                    await coord.stop(context: ctx)
+                    NSApp.reply(toApplicationShouldTerminate: true)
+                }
+                return .terminateLater
+            }
+
+            if coord.isBusy {
+                let alert = NSAlert()
+                alert.messageText = "Oatmeal is still finishing this meeting"
+                alert.informativeText = "It's transcribing and summarizing. Quitting now may lose the summary."
+                alert.addButton(withTitle: "Wait")
+                alert.addButton(withTitle: "Quit Anyway")
+                return alert.runModal() == .alertFirstButtonReturn ? .terminateCancel : .terminateNow
+            }
+
+            return .terminateNow
         }
     }
 }

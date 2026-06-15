@@ -6,6 +6,7 @@ struct RootView: View {
     var detector: MeetingDetector
     @State private var appearance = Appearance.shared
     @AppStorage("hasOnboarded") private var hasOnboarded = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -21,5 +22,10 @@ struct RootView: View {
         }
         .animation(.smooth(duration: 0.4), value: hasOnboarded)
         .preferredColorScheme(appearance.colorScheme)
+        // Capture a reopen action that outlives this window being closed, so the
+        // floating panel's "open main window" control works even after a close.
+        .onAppear {
+            MainWindowAccess.shared.openMain = { openWindow(id: OatmealApp.mainWindowID) }
+        }
     }
 }
