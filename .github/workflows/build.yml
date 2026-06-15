@@ -1,0 +1,36 @@
+name: Build
+
+# Confirms the app still compiles. Runs on every push to main, on pull requests,
+# and when triggered manually from the Actions tab. No code signing, no secrets —
+# it only checks that the code builds (a green check) or doesn't (a red X).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        # The .xcodeproj is gitignored and generated from project.yml.
+        run: xcodegen generate
+
+      - name: Build (compile check, signing disabled)
+        run: |
+          xcodebuild \
+            -project Oatmeal.xcodeproj \
+            -scheme Oatmeal \
+            -configuration Debug \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
