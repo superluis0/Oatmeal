@@ -240,6 +240,9 @@ final class RecordingCoordinator {
             let summary = Summary(text: result.text, actionItems: result.actionItems, keyPoints: result.keyPoints)
             context.insert(summary)
             meeting.summary = summary
+            // Stamp the transcript the summary was built from, so later speaker
+            // fixes / edits can detect when it's gone stale.
+            summary.transcriptSignature = meeting.currentSummarySignatureHash
         } catch {
             Log.error("summarization failed (transcript kept)", "summary", error)
             phase = .error("Transcript saved, but summary failed: \(error.localizedDescription)")
@@ -337,10 +340,23 @@ final class RecordingCoordinator {
         phase = .idle
     }
 
-    /// If the number of diarized "Speaker N" labels matches the expected-speaker
-    /// count, pre-fill display names from the attendees (user can re-edit).
-    /// The note-taker is excluded — their speech is already labeled "Me" — as are
-    /// attendees the prep roster marked as not speaking.
+    /// Best-effort pre-fill of display names from the roster. Maps the diarized
+    /// "Speaker N" labels (in order) onto the non-self expected speakers (in roster
+    /// order). The note-taker is excluded — their speech is already labeled "Me".
+    ///
+    /// Two deliberate properties:
+    /// - **Never bail on a count mismatch.** `zip` maps up to the smaller of the
+    ///   two, so a near-miss (e.g. 3 detected voices vs 2 roster names) still names
+    ///   what it can instead of leaving everything as "Speaker N". The wrap-up
+    ///   confirm step (shown only when a voice is left unnamed — see
+    ///   `Meeting.needsSpeakerConfirmation`) lets the user resolve the rest in one
+    ///   tap each.
+    /// - **Positional mapping is a GUESS**, not verified: label order is the
+    ///   diarizer's discovery order and roster order is arbitrary, so even a clean
+    ///   count match can be swapped. That's acceptable for a prefill the user
+    ///   confirms; never treat these names as ground truth.
+    ///
+    /// Never overwrites a name the user already set (e.g. on the re-identify path).
     private func autoNameSpeakers(_ meeting: Meeting, segments: [LiveSegment]) {
         let labels = Set(segments.map { $0.speaker }.filter { $0.hasPrefix("Speaker ") })
             .sorted { lhs, rhs in
@@ -349,8 +365,8 @@ final class RecordingCoordinator {
         let names = meeting.attendees
             .filter { $0.expectedToSpeak && !$0.isSelf }
             .map { $0.name }
-        guard !labels.isEmpty, labels.count == names.count else { return }
-        for (label, name) in zip(labels, names) {
+        guard !labels.isEmpty, !names.isEmpty else { return }
+        for (label, name) in zip(labels, names) where meeting.speakerNames[label] == nil {
             meeting.speakerNames[label] = name
         }
     }
@@ -615,8 +631,18 @@ final class RecordingCoordinator {
 
     /// Upper-bound speaker hint for diarization, drawn from the attendees who
     /// are expected to speak (nil when unknown, so the diarizer auto-detects).
+    ///
+    /// Remote calls: the other participants are on the SYSTEM stream while the
+    /// note-taker is on the mic (labeled "Me"), so the hint — which constrains the
+    /// system diarizer — must EXCLUDE self. Counting self here told the diarizer to
+    /// find one extra speaker, over-splitting the others. In-person: everyone
+    /// (including self) is on the mic, so count all expected speakers.
+    /// Stays an upper bound (`maxSpeakers`), never a hard count: the roster is
+    /// routinely wrong in both directions.
     private func expectedSpeakerHint(for meeting: Meeting) -> Int? {
-        let n = meeting.attendees.filter(\.expectedToSpeak).count
+        let expected = meeting.attendees.filter(\.expectedToSpeak)
+        let n = AppSettings.inPersonMode ? expected.count
+                                         : expected.filter { !$0.isSelf }.count
         return n >= 2 ? n : nil
     }
 
@@ -702,6 +728,7 @@ final class RecordingCoordinator {
             let summary = Summary(text: result.text, actionItems: result.actionItems, keyPoints: result.keyPoints)
             context.insert(summary)
             meeting.summary = summary
+            summary.transcriptSignature = meeting.currentSummarySignatureHash
             if let old { context.delete(old) }
             SafeStore.save(context, "resummarize")
             SemanticIndex(context: context).reindex(meeting)

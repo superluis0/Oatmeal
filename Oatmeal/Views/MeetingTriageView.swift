@@ -14,8 +14,20 @@ struct MeetingTriageView: View {
 
     @State private var step = 0
     @State private var quickAdd = ""
+    /// Decided once on appear so confirming names mid-flow doesn't reshuffle steps.
+    @State private var includeSpeakers: Bool? = nil
+    @State private var player = AudioPlayer()
 
-    private let steps = ["Review", "Tasks", "Recap"]
+    enum TriageStep { case speakers, review, tasks, recap }
+
+    /// The Speakers step leads only when auto-naming was unsure; otherwise the
+    /// ritual is the original Review → Tasks → Recap.
+    private var steps: [TriageStep] {
+        var s: [TriageStep] = []
+        if includeSpeakers ?? meeting.needsSpeakerConfirmation { s.append(.speakers) }
+        s += [.review, .tasks, .recap]
+        return s
+    }
 
     var body: some View {
         Group {
@@ -37,6 +49,12 @@ struct MeetingTriageView: View {
         .frame(width: 580, height: 580)
         .background(Theme.bg)
         .fontDesign(Appearance.shared.fontDesign)
+        .onAppear {
+            if includeSpeakers == nil { includeSpeakers = meeting.needsSpeakerConfirmation }
+            if let path = meeting.audioPath, FileManager.default.fileExists(atPath: path) {
+                player.load(path: path)
+            }
+        }
     }
 
     private var header: some View {
@@ -60,11 +78,94 @@ struct MeetingTriageView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch step {
-        case 0: reviewStep
-        case 1: tasksStep
-        default: recapStep
+        switch steps[min(step, steps.count - 1)] {
+        case .speakers: speakersStep
+        case .review: reviewStep
+        case .tasks: tasksStep
+        case .recap: recapStep
         }
+    }
+
+    // MARK: Step 0 — Confirm speakers (only when auto-naming was unsure)
+
+    /// Every detected non-self voice (named or not), so the user can fix a wrong
+    /// auto-name as well as fill in the unnamed ones.
+    private var confirmableLabels: [String] {
+        Set(meeting.orderedSegments.map(\.speaker).filter { $0.hasPrefix("Speaker ") })
+            .sorted { (Int($0.dropFirst(8)) ?? 0) < (Int($1.dropFirst(8)) ?? 0) }
+    }
+
+    private var speakersStep: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.md) {
+            Label("Who said what?", systemImage: "person.2.wave.2").font(.system(.headline))
+            Text("We weren't sure about every voice. Confirm or fix the names — the summary updates as you go.")
+                .font(.caption).foregroundStyle(Theme.textSecondary)
+            ForEach(confirmableLabels, id: \.self) { label in
+                VStack(alignment: .leading, spacing: 6) {
+                    if let sample = sampleLine(for: label) {
+                        HStack(alignment: .top, spacing: 8) {
+                            if meeting.audioPath != nil {
+                                Button { playSample(sample) } label: {
+                                    Image(systemName: "play.circle")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Hear this voice")
+                            }
+                            Text("“\(sample.text)”")
+                                .font(.caption).italic()
+                                .foregroundStyle(Theme.textSecondary)
+                                .lineLimit(3)
+                        }
+                    }
+                    SpeakerRenameRow(
+                        label: label,
+                        currentName: meeting.displayName(for: label),
+                        attendees: meeting.liveAttendees.filter { !$0.isSelf }.map(\.name),
+                        mergeTargets: confirmableLabels.filter { $0 != label }
+                            .map { (label: $0, name: meeting.displayName(for: $0)) },
+                        onSetName: { renameSpeaker(label, to: $0) },
+                        onMerge: { mergeSpeaker(label, into: $0) }
+                    )
+                }
+                .padding(Theme.Space.sm)
+                .background(Theme.surfaceAlt, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+            }
+        }
+    }
+
+    /// The most identifying line for a voice: its longest segment, earliest on a tie.
+    private func sampleLine(for label: String) -> TranscriptSegment? {
+        meeting.orderedSegments
+            .filter { $0.speaker == label }
+            .max { a, b in
+                a.text.count != b.text.count ? a.text.count < b.text.count : a.start > b.start
+            }
+    }
+
+    private func playSample(_ seg: TranscriptSegment) {
+        guard let path = meeting.audioPath, FileManager.default.fileExists(atPath: path) else { return }
+        player.load(path: path)
+        player.seek(to: seg.start)
+        player.play()
+    }
+
+    /// Cheap rename + summary sync (see `Meeting.setSpeakerName`), then persist.
+    private func renameSpeaker(_ label: String, to newName: String) {
+        meeting.setSpeakerName(newName, for: label)
+        SafeStore.save(context, "confirm-speaker")
+        SemanticIndex(context: context).reindex(meeting)
+    }
+
+    /// Structural merge (fixes over-splitting) — leaves the summary stale so the
+    /// detail view's "Update summary" surfaces.
+    private func mergeSpeaker(_ from: String, into target: String) {
+        let fromName = meeting.displayName(for: from)
+        let toName = meeting.displayName(for: target)
+        for seg in meeting.orderedSegments where seg.speaker == from { seg.speaker = target }
+        meeting.speakerNames[from] = nil
+        meeting.relabelOwners(from: fromName, to: toName)
+        SafeStore.save(context, "confirm-merge")
+        SemanticIndex(context: context).reindex(meeting)
     }
 
     // MARK: Step 1 — Review

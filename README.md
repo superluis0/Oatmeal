@@ -38,7 +38,7 @@ Everything runs on your Mac. No cloud. No account. No bots in your meetings.</p>
 ## ✨ Highlights
 
 - 🎙️ **One-click capture:** records the other participants (system audio) **and** your mic. No meeting bots, no invite links. Works for online calls **and** in-person meetings (a one-tap switch by the record button).
-- 🗣️ **Speaker-labeled transcripts:** on-device diarization, with editable names, merge, and re-identify.
+- 🗣️ **Speaker-labeled transcripts:** on-device diarization with editable names, merge, and re-identify. A quick **confirm-speakers** step at wrap-up (shown only when names are uncertain) gets attribution right up front — and fixing a speaker afterward keeps the **summary, key points, and action items in sync** automatically (a plain rename patches them instantly; a structural change offers one-tap **Update summary**).
 - ⚡ **Two transcription engines:** Parakeet (proven default) or NVIDIA's new **Nemotron streaming** model for live captions — swap anytime in Settings, both fully on-device.
 - ✍️ **Notes that write themselves:** jot a few words, and the local LLM turns them into clean, structured notes.
 - 🧠 **Summaries &amp; action items:** decisions, owners, numbers, and follow-ups, extracted automatically.

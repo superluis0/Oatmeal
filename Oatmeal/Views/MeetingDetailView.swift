@@ -630,6 +630,9 @@ struct MeetingDetailView: View {
            let summary = meeting.summary, !summary.isDeleted, summary.modelContext != nil {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
+                    if meeting.summaryIsStale, let coordinator {
+                        summaryStaleBanner(coordinator)
+                    }
                     if !summary.text.isEmpty {
                         MarkdownView(markdown: summary.text)
                     }
@@ -654,6 +657,33 @@ struct MeetingDetailView: View {
                 Label("Summary", systemImage: "sparkles")
             }
         }
+    }
+
+    /// Shown when a speaker correction (merge / re-identify / transcript edit) has
+    /// made the stored summary stale. A plain rename patches the summary in place,
+    /// so it does NOT show this — only structural changes that need a real redo do.
+    private func summaryStaleBanner(_ coordinator: RecordingCoordinator) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+            Text("Speakers changed since this summary was written.")
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button {
+                Task { await coordinator.regenerateSummary(for: meeting, context: context) }
+            } label: {
+                if coordinator.isBusy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Update summary").font(.caption.weight(.semibold))
+                }
+            }
+            .buttonStyle(.borderless)
+            .disabled(coordinator.isBusy)
+        }
+        .padding(8)
+        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+        .foregroundStyle(Theme.accent)
     }
 
     private func seriesMatches(_ other: Meeting) -> Bool {
@@ -1053,44 +1083,27 @@ struct MeetingDetailView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Rename & merge speakers").font(.caption.bold()).foregroundStyle(.secondary)
                 ForEach(uniqueSpeakers, id: \.self) { original in
-                    HStack {
-                        Text(original).font(.caption).foregroundStyle(.secondary).frame(width: 90, alignment: .leading)
-                        TextField(original, text: speakerNameBinding(original))
-                            .textFieldStyle(.roundedBorder)
-                        if !meeting.liveAttendees.isEmpty {
-                            Menu {
-                                ForEach(meeting.liveAttendees) { a in
-                                    Button(a.name) {
-                                        meeting.speakerNames[original] = a.name
-                                        try? context.save()
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "person.crop.circle.badge.plus")
-                            }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
-                            .help("Assign an attendee name")
-                        }
-                        let others = uniqueSpeakers.filter { $0 != original }
-                        if !others.isEmpty {
-                            Menu {
-                                ForEach(others, id: \.self) { target in
-                                    Button("Merge into \(meeting.displayName(for: target))") {
-                                        mergeSpeaker(original, into: target)
-                                    }
-                                }
-                            } label: {
-                                Image(systemName: "arrow.triangle.merge")
-                            }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
-                            .help("Merge this speaker's lines into another (fixes over-splitting)")
-                        }
-                    }
+                    SpeakerRenameRow(
+                        label: original,
+                        currentName: meeting.displayName(for: original),
+                        attendees: meeting.liveAttendees.map(\.name),
+                        mergeTargets: uniqueSpeakers.filter { $0 != original }
+                            .map { (label: $0, name: meeting.displayName(for: $0)) },
+                        onSetName: { renameSpeaker(original, to: $0) },
+                        onMerge: { mergeSpeaker(original, into: $0) }
+                    )
                 }
             }
         }
+    }
+
+    /// Set/clear a speaker's display name and keep the summary in sync cheaply
+    /// (whole-word text patch, no LLM — see `Meeting.setSpeakerName`), then persist
+    /// and reindex. Shared by the rename editor and the wrap-up confirm step.
+    private func renameSpeaker(_ label: String, to newName: String) {
+        meeting.setSpeakerName(newName, for: label)
+        SafeStore.save(context, "rename-speaker")
+        SemanticIndex(context: context).reindex(meeting)
     }
 
     private func reidentify() async {
@@ -1104,25 +1117,13 @@ struct MeetingDetailView: View {
     /// Reassigns every segment of `from` to `target` and reindexes — making the
     /// merge structural (the transcript, summaries, and chat all see one speaker).
     private func mergeSpeaker(_ from: String, into target: String) {
+        let fromName = meeting.displayName(for: from)
+        let toName = meeting.displayName(for: target)
         for seg in meeting.orderedSegments where seg.speaker == from { seg.speaker = target }
         meeting.speakerNames[from] = nil
+        meeting.relabelOwners(from: fromName, to: toName)
         try? context.save()
         SemanticIndex(context: context).reindex(meeting)
-    }
-
-    private func speakerNameBinding(_ original: String) -> Binding<String> {
-        Binding(
-            get: { meeting.speakerNames[original] ?? original },
-            set: { newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespaces)
-                if trimmed.isEmpty || trimmed == original {
-                    meeting.speakerNames[original] = nil
-                } else {
-                    meeting.speakerNames[original] = trimmed
-                }
-                try? context.save()
-            }
-        )
     }
 
     private func editableRow(_ seg: TranscriptSegment) -> some View {
@@ -1135,6 +1136,70 @@ struct MeetingDetailView: View {
                 .textFieldStyle(.roundedBorder)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - Speaker rename row
+
+/// One row of the speaker rename/merge editor. Keeps a local draft so the
+/// expensive summary-sync + reindex fires once, on commit (Return or focus loss),
+/// rather than on every keystroke — and so the pre-edit name is still available
+/// for the whole-word summary patch. Reused by the wrap-up confirm step.
+struct SpeakerRenameRow: View {
+    let label: String
+    let currentName: String
+    let attendees: [String]
+    let mergeTargets: [(label: String, name: String)]
+    var onSetName: (String) -> Void
+    var onMerge: (String) -> Void
+
+    @State private var draft: String = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack {
+            Text(label).font(.caption).foregroundStyle(.secondary).frame(width: 90, alignment: .leading)
+            TextField(label, text: $draft)
+                .textFieldStyle(.roundedBorder)
+                .focused($focused)
+                .onSubmit(commit)
+                .onChange(of: focused) { _, isFocused in if !isFocused { commit() } }
+            if !attendees.isEmpty {
+                Menu {
+                    ForEach(attendees, id: \.self) { name in
+                        Button(name) { onSetName(name) }
+                    }
+                } label: {
+                    Image(systemName: "person.crop.circle.badge.plus")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Assign an attendee name")
+            }
+            if !mergeTargets.isEmpty {
+                Menu {
+                    ForEach(mergeTargets, id: \.label) { target in
+                        Button("Merge into \(target.name)") { onMerge(target.label) }
+                    }
+                } label: {
+                    Image(systemName: "arrow.triangle.merge")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Merge this speaker's lines into another (fixes over-splitting)")
+            }
+        }
+        .onAppear(perform: syncDraft)
+        .onChange(of: currentName) { _, _ in syncDraft() }
+    }
+
+    /// Show the assigned name, or blank when the speaker is still the raw label.
+    private func syncDraft() { draft = (currentName == label) ? "" : currentName }
+
+    private func commit() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != currentName else { return }   // no real change
+        onSetName(trimmed)                              // empty clears back to the label
     }
 }
 

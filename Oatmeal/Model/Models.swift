@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import CryptoKit
 
 // MARK: - Deleted-object safety
 
@@ -157,6 +158,92 @@ final class Meeting {
             .map { "\(displayName(for: $0.speaker)): \($0.text)" }
             .joined(separator: "\n")
     }
+
+    // MARK: Summary staleness
+
+    /// The exact string fed to the summarizer — display names resolved, "Me"
+    /// grounded to the user's real name. The staleness signature is derived from
+    /// this so the summary tracks precisely what the LLM saw.
+    var summarySignatureBasis: String {
+        MeetingIdentity.ground(transcript: transcriptText, userName: AppSettings.userName)
+    }
+
+    /// Stable content hash (SHA-256 hex) of `summarySignatureBasis`. Stable across
+    /// launches — deliberately NOT Swift's per-process-seeded `Hasher`, which would
+    /// mark every summary stale on each relaunch.
+    var currentSummarySignatureHash: String {
+        SHA256.hash(data: Data(summarySignatureBasis.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    /// True when a summary exists but the transcript it was generated from no
+    /// longer matches the current (speaker-resolved) transcript — e.g. after a
+    /// merge, re-identify, or transcript edit. A `nil` stored signature (legacy
+    /// summaries) reads as not-stale.
+    var summaryIsStale: Bool {
+        guard let s = liveSummary, let sig = s.transcriptSignature else { return false }
+        return sig != currentSummarySignatureHash
+    }
+
+    /// Diarized "Speaker N" labels (the non-self voices) that still carry no
+    /// assigned name — the ones a wrap-up confirm step would ask about. Sorted by
+    /// speaker number.
+    var unnamedSpeakerLabels: [String] {
+        Set(orderedSegments.map(\.speaker).filter { $0.hasPrefix("Speaker ") })
+            .filter { speakerNames[$0] == nil }
+            .sorted { (Int($0.dropFirst(8)) ?? 0) < (Int($1.dropFirst(8)) ?? 0) }
+    }
+
+    /// True when auto-naming couldn't confidently name every detected voice (a
+    /// count mismatch, no roster, etc.) — the signal that the wrap-up should show
+    /// its confirm-speakers step. Empty/false in the confident case (clean match),
+    /// so confident meetings skip straight to the summary.
+    var needsSpeakerConfirmation: Bool { !unnamedSpeakerLabels.isEmpty }
+
+    /// Set or clear a diarized speaker label's display name and keep an existing
+    /// summary textually in sync **cheaply** (no LLM): whole-word replace the old
+    /// display name with the new one across the summary's prose/points/items, then
+    /// re-stamp the signature so the (now-correct) summary doesn't read as stale.
+    /// The caller is responsible for saving + reindexing.
+    func setSpeakerName(_ rawName: String, for label: String) {
+        let old = displayName(for: label)
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        speakerNames[label] = (trimmed.isEmpty || trimmed == label) ? nil : trimmed
+        let new = displayName(for: label)
+        guard old != new else { return }
+        // Carry the speaker's tasks over to the new name too.
+        relabelOwners(from: old, to: new)
+        guard let s = liveSummary else { return }
+        s.text = Meeting.replacingWholeWord(old, with: new, in: s.text)
+        s.keyPoints = s.keyPoints.map { Meeting.replacingWholeWord(old, with: new, in: $0) }
+        s.actionItems = s.actionItems.map { Meeting.replacingWholeWord(old, with: new, in: $0) }
+        // A rename changes the grounded-transcript hash, so without re-stamping the
+        // correctly-patched summary would immediately read as stale.
+        s.transcriptSignature = currentSummarySignatureHash
+    }
+
+    /// Reassign action items owned under one display name to another, so a fixed
+    /// or merged speaker carries their tasks. Used by rename and merge.
+    func relabelOwners(from old: String, to new: String) {
+        guard old != new else { return }
+        for item in liveActionItems where item.owner == old {
+            item.owner = new
+        }
+    }
+
+    /// Whole-word replace that won't let "Speaker 1" match inside "Speaker 12" or
+    /// "Sam" match inside "Samantha" (Unicode letter/number boundaries on both
+    /// sides). Returns the input unchanged when there's nothing safe to do.
+    static func replacingWholeWord(_ old: String, with new: String, in text: String) -> String {
+        let o = old.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !o.isEmpty, o != new else { return text }
+        let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: o) + "(?![\\p{L}\\p{N}])"
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        return re.stringByReplacingMatches(in: text, range: range,
+                                           withTemplate: NSRegularExpression.escapedTemplate(for: new))
+    }
 }
 
 @Model
@@ -181,6 +268,12 @@ final class Summary {
     var actionItems: [String]
     var keyPoints: [String]
     var createdAt: Date
+    /// Hash of the grounded transcript this summary was generated from, used to
+    /// detect when speaker fixes / transcript edits have made the summary stale.
+    /// Optional with a default so adding it is a lightweight, non-destructive
+    /// SwiftData migration; legacy summaries migrate in as `nil` (treated as
+    /// not-stale, so old meetings never surface a spurious "update" prompt).
+    var transcriptSignature: String? = nil
 
     init(text: String, actionItems: [String] = [], keyPoints: [String] = [], createdAt: Date = .now) {
         self.text = text
