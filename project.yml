@@ -32,8 +32,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.oatmeal.Oatmeal
         PRODUCT_NAME: Oatmeal
-        MARKETING_VERSION: "0.4.0"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "0.5.0"
+        CURRENT_PROJECT_VERSION: "5"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Oatmeal/Info.plist
         CODE_SIGN_ENTITLEMENTS: Oatmeal/Oatmeal.entitlements

@@ -3,12 +3,12 @@
     <channel>
         <title>Oatmeal</title>
         <item>
-            <title>0.4.0</title>
-            <pubDate>Sun, 14 Jun 2026 16:48:30 -0500</pubDate>
-            <sparkle:version>4</sparkle:version>
-            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
+            <title>0.5.0</title>
+            <pubDate>Sun, 14 Jun 2026 21:36:53 -0500</pubDate>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/superluis0/Oatmeal/releases/download/v0.4.0/Oatmeal-0.4.0.zip" length="12078174" type="application/octet-stream" sparkle:edSignature="QCbNunkZ+FwJ7XHB8/ht6sMAWe+nauiQea/P0zBtR0Iv0hVvLqX15DWuYOv5AbAkH5pnolPNASQ+DdDm0eNNAA=="/>
+            <enclosure url="https://github.com/superluis0/Oatmeal/releases/download/v0.5.0/Oatmeal-0.5.0.zip" length="12141879" type="application/octet-stream" sparkle:edSignature="cYJZuI0aqlXMEC44KbvLriXarGsbowsAatiQru9CP7cw05aMz+MCdEulDdKmXEce7xzNGDwqLE0jABoUsZbqAQ=="/>
         </item>
     </channel>
 </rss>
