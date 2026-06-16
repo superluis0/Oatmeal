@@ -122,30 +122,38 @@ struct MeetingListView: View {
 
     private func row(_ meeting: Meeting) -> some View {
         let isSelected = selection?.persistentModelID == meeting.persistentModelID
-        return NavigationLink(value: meeting) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(meeting.title)
-                    .font(.system(size: Appearance.shared.scaled(14), weight: .semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(isSelected ? Color.white : Theme.textPrimary)
-                HStack(spacing: 5) {
-                    Text(meeting.date, format: .dateTime.month().day().hour().minute())
-                    if meeting.duration > 0 {
-                        Text("·")
-                        Text(meeting.durationLabel)
-                    }
-                }
-                .font(.system(size: Appearance.shared.scaled(11)))
-                .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Theme.textSecondary)
-                if !meeting.tags.isEmpty {
-                    Text(meeting.tags.map { "#\($0)" }.joined(separator: " "))
-                        .font(.system(size: Appearance.shared.scaled(10)))
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.95) : Theme.accent)
-                        .lineLimit(1)
+        // A plain, tagged row — deliberately NOT a NavigationLink. The detail pane
+        // is driven entirely by `selection` (ContentView has no
+        // navigationDestination for Meeting), so wrapping the row in a
+        // NavigationLink added a second, competing selection mechanism: the link
+        // captured the click for a navigation that goes nowhere while
+        // `List(selection:)` updated a beat later — which is why the first click on
+        // a meeting often left the detail blank until you clicked away and back.
+        // `.tag` + `List(selection:)` is the single, reliable source of selection.
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(meeting.title)
+                .font(.system(size: Appearance.shared.scaled(14), weight: .semibold))
+                .lineLimit(1)
+                .foregroundStyle(isSelected ? Color.white : Theme.textPrimary)
+            HStack(spacing: 5) {
+                Text(meeting.date, format: .dateTime.month().day().hour().minute())
+                if meeting.duration > 0 {
+                    Text("·")
+                    Text(meeting.durationLabel)
                 }
             }
-            .padding(.vertical, 3)
+            .font(.system(size: Appearance.shared.scaled(11)))
+            .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Theme.textSecondary)
+            if !meeting.tags.isEmpty {
+                Text(meeting.tags.map { "#\($0)" }.joined(separator: " "))
+                    .font(.system(size: Appearance.shared.scaled(10)))
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.95) : Theme.accent)
+                    .lineLimit(1)
+            }
         }
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .tag(meeting)
         .contextMenu {
             Menu("Move to Folder") {
