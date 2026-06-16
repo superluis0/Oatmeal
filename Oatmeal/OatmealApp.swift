@@ -60,6 +60,7 @@ struct OatmealApp: App {
             // one-click install flow (see UpdateChecker).
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { UpdateChecker.shared.checkForUpdates() }
+                OpenLogsMenuItem()
                 Button("Reveal Logs in Finder") {
                     if let dir = Log.logDirectory {
                         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -68,6 +69,14 @@ struct OatmealApp: App {
                 }
             }
         }
+
+        // A dedicated, resizable window for reading the diagnostic log with
+        // structure — severity badges, search, and a warnings/errors filter.
+        // Opened from Settings → Privacy and the app menu; closed by default.
+        Window("Oatmeal Logs", id: "logs") {
+            LogViewerView()
+        }
+        .defaultSize(width: 840, height: 640)
 
         MenuBarExtra {
             MenuBarView(coordinator: coordinator)
@@ -184,6 +193,16 @@ final class MainWindowAccess {
     func show() {
         NSApp.activate(ignoringOtherApps: true)
         openMain?()
+    }
+}
+
+/// A menu command that opens the dedicated Logs window. `openWindow` is only
+/// available to a `View`, not a bare scene's `.commands` closure, so this tiny
+/// wrapper carries it into the app menu.
+private struct OpenLogsMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("View Logs…") { openWindow(id: "logs") }
     }
 }
 

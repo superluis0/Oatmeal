@@ -31,6 +31,7 @@ struct SettingsView: View {
     @State private var backupConfirmed = false
     @Bindable private var appearance = Appearance.shared
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openWindow) private var openWindow
     @Query private var allMeetings: [Meeting]
 
     var body: some View {
@@ -251,16 +252,14 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Button("Reveal data folder in Finder") { revealDataFolder() }
-                Button("Reveal diagnostic logs") {
-                    if let dir = Log.logDirectory {
-                        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                        NSWorkspace.shared.activateFileViewerSelecting([dir])
-                    }
-                }
+                Button("View logs…") { openWindow(id: "logs") }
                 Button("Copy diagnostics for support") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(Log.diagnosticsSummary(), forType: .string)
                 }
+                Text("Logs are breadcrumbs of what Oatmeal did — never your audio, transcripts, or notes. Open them to check on a recording, or copy a report when something needs a closer look.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Button("Back up meetings now") {
                     StoreBackup.snapshot(context: modelContext)
                     backupConfirmed = true
