@@ -27,6 +27,15 @@ final class RecordingCoordinator {
     var isSuggesting = false
     /// Non-fatal warning (e.g. system audio unavailable) shown during recording.
     var captureWarning: String?
+    /// True when the in-progress recording can't capture system (meeting) audio in
+    /// REMOTE mode — i.e. the other participants aren't being recorded. Surfaced
+    /// prominently (main window + floating panel), unlike the soft `captureWarning`.
+    private(set) var systemAudioMissing = false
+    /// Set when a remote recording was requested without Screen Recording granted,
+    /// so the UI can confirm before wasting a meeting on a mic-only capture.
+    var pendingScreenRecordingDecision = false
+    /// The event awaiting a "record anyway (mic only)" decision, replayed on resume.
+    private var pendingEvent: UpcomingMeeting?
     /// Smoothed live input level in 0...1, driven by the mic+system sample flow.
     /// Used by audio-reactive UI (e.g. the record orb). Updated on the main actor.
     private(set) var audioLevel: Float = 0
@@ -64,10 +73,36 @@ final class RecordingCoordinator {
         }
     }
 
+    /// Warm the speech models in the background so the first **Record** tap is
+    /// instant instead of waiting on a cold model load. `prepare()` is idempotent
+    /// and guarded, so this is a cheap no-op once ready (or if a recording is
+    /// already starting). Call only when models are known present (see
+    /// `AppSettings.modelsPreparedBefore`) so we never trigger the first-run
+    /// download ahead of the user choosing to record.
+    func prewarm() {
+        Task(priority: .utility) {
+            // Let launch settle before pulling the models into memory.
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard phase == .idle else { return }
+            do { try await transcription.prepare() }
+            catch { Log.warn("model prewarm failed (will retry on record): \(error.localizedDescription)", "recording") }
+        }
+    }
+
     // MARK: - Start
 
-    func start(context: ModelContext, event: UpcomingMeeting? = nil) async {
+    func start(context: ModelContext, event: UpcomingMeeting? = nil, forceMicOnly: Bool = false) async {
         guard phase == .idle else { return }
+        // Remote calls live or die on system audio (the other participants). If Screen
+        // Recording isn't granted, don't silently fall back to a near-useless mic-only
+        // recording — surface a decision first. Bring the main window forward so the
+        // prompt is visible even when recording was triggered with no window open.
+        if !forceMicOnly, !AppSettings.inPersonMode, !AudioCaptureEngine.hasScreenRecordingPermission {
+            pendingEvent = event
+            pendingScreenRecordingDecision = true
+            MainWindowAccess.shared.show()
+            return
+        }
         Log.info("recording start requested", "recording")
         liveSegments = []
         liveMe = ""
@@ -77,6 +112,7 @@ final class RecordingCoordinator {
         lastAssistQuestion = ""
         lastAssistFire = nil
         captureWarning = nil
+        systemAudioMissing = false
 
         // Permissions
         let micOK = await AudioCaptureEngine.requestMicrophoneAccess()
@@ -88,6 +124,8 @@ final class RecordingCoordinator {
         phase = .preparingModels
         do {
             try await transcription.prepare()
+            // Models are now on disk — safe to prewarm them on future launches.
+            AppSettings.modelsPreparedBefore = true
         } catch {
             phase = .error("Failed to load speech models: \(error.localizedDescription)")
             return
@@ -127,6 +165,10 @@ final class RecordingCoordinator {
         // is non-fatal and the recording proceeds normally.
         let engineNote = await transcription.takeLiveEngineNote()
         captureWarning = engine.systemCaptureWarning ?? engineNote
+        // In remote mode, losing system audio means the other participants aren't
+        // recorded — flag it for the prominent in-recording warning (not just the
+        // soft strip). This also catches a stale grant that the pre-flight missed.
+        systemAudioMissing = (engine.systemCaptureWarning != nil) && !AppSettings.inPersonMode
 
         let meeting = Meeting(title: defaultTitle())
         context.insert(meeting)
@@ -150,6 +192,23 @@ final class RecordingCoordinator {
     private func playChime(_ name: String) {
         guard Appearance.shared.recordingChime else { return }
         NSSound(named: name)?.play()
+    }
+
+    /// Proceed with a recording the user chose to keep mic-only after being warned
+    /// that Screen Recording is off.
+    func startMicOnlyAfterPrompt(context: ModelContext) async {
+        let event = pendingEvent
+        pendingEvent = nil
+        pendingScreenRecordingDecision = false
+        await start(context: context, event: event, forceMicOnly: true)
+    }
+
+    /// Open macOS Screen Recording settings (and dismiss the decision prompt).
+    func openScreenRecordingSettings() {
+        pendingScreenRecordingDecision = false
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // MARK: - Stop
@@ -187,6 +246,19 @@ final class RecordingCoordinator {
             // Clear active state so the next recording starts clean (otherwise a
             // stale startDate inflates the next session's elapsed time).
             Log.error("transcription failed", "recording", error)
+            // A capture-permission failure is fixable and worth surfacing — don't
+            // silently discard. Keep the meeting with a clear explanation so it's
+            // visible and actionable instead of vanishing without a trace.
+            if systemAudioMissing {
+                if meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    meeting.notes = "⚠️ No audio was captured for this meeting. Screen Recording was off, so the other participants weren't recorded (and the mic alone caught nothing usable). To fix it: System Settings → Privacy & Security → Screen & System Audio Recording → turn on Oatmeal, then fully quit Oatmeal (menu-bar icon → Quit) and reopen it."
+                }
+                SafeStore.save(context, "capture-failed-kept")
+                activeMeeting = nil
+                startDate = nil
+                phase = .error("No audio was captured — Screen Recording looks off. Your meeting was kept with steps to fix it.")
+                return
+            }
             // Discard the empty meeting (nothing was transcribed) unless the user
             // typed notes — leaving it behind creates a broken half-meeting.
             if meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -215,6 +287,11 @@ final class RecordingCoordinator {
         // Archive audio (mixed) best-effort
         meeting.audioPath = saveAudio(system: system, mic: mic, meetingID: meeting.id)
 
+        // Commit the transcript NOW, before the multi-second LLM step — so a crash or
+        // force-quit mid-processing can't lose it. Only the summary would then need a
+        // redo, which the detail view's "Generate summary" banner already offers.
+        SafeStore.save(context, "transcript-saved")
+
         guard await summarizeAndEnhance(meeting: meeting, context: context) else { return }
         activeMeeting = nil
         phase = .idle
@@ -229,36 +306,46 @@ final class RecordingCoordinator {
         let identity = MeetingIdentity.preamble(knownSpeakers: meeting.speakerNames)
         let transcript = MeetingIdentity.ground(transcript: meeting.transcriptText, userName: AppSettings.userName)
 
-        phase = .processing("Generating summary with LM Studio…")
+        // Capture the model-derived inputs on the main actor up front, then run the
+        // two independent LLM calls — the summary (required) and note enhancement
+        // (best-effort) — concurrently. At most two requests are in flight, which a
+        // local server simply queues if it isn't running parallel slots (no downside
+        // on a single-stream model, a real win on one that batches). Action-item
+        // extraction stays after enhancement since it reads the enhanced notes.
+        let title = meeting.title
+        let attendees = meeting.attendeeNames
+        let rawNotes = meeting.notes
+        let template = await resolveTemplate(for: meeting, transcript: transcript, context: context)
+
+        phase = .processing("Generating summary & notes…")
+        async let summaryResult = SummarizationService().summarize(
+            transcript: transcript, title: title, attendees: attendees, identity: identity)
+        async let enhanceResult = NoteEnhancementService()
+            .enhance(rawNotes: rawNotes, transcript: transcript, template: template, identity: identity)
+
+        let result: MeetingSummary
         do {
-            let result = try await SummarizationService().summarize(
-                transcript: transcript,
-                title: meeting.title,
-                attendees: meeting.attendeeNames,
-                identity: identity
-            )
-            let summary = Summary(text: result.text, actionItems: result.actionItems, keyPoints: result.keyPoints)
-            context.insert(summary)
-            meeting.summary = summary
-            // Stamp the transcript the summary was built from, so later speaker
-            // fixes / edits can detect when it's gone stale.
-            summary.transcriptSignature = meeting.currentSummarySignatureHash
+            result = try await summaryResult
         } catch {
+            _ = try? await enhanceResult   // drain the concurrent enhance before bailing
             Log.error("summarization failed (transcript kept)", "summary", error)
             phase = .error("Transcript saved, but summary failed: \(error.localizedDescription)")
             SafeStore.save(context, "summary-failed")
             SemanticIndex(context: context).reindex(meeting)
             return false
         }
+        let summary = Summary(text: result.text, actionItems: result.actionItems, keyPoints: result.keyPoints)
+        context.insert(summary)
+        meeting.summary = summary
+        // Stamp the transcript the summary was built from, so later speaker
+        // fixes / edits can detect when it's gone stale.
+        summary.transcriptSignature = meeting.currentSummarySignatureHash
 
         // Non-fatal: keep transcript + summary even if enhancement fails.
-        phase = .processing("Enhancing your notes…")
-        let template = await resolveTemplate(for: meeting, transcript: transcript, context: context)
         meeting.templateName = template.name
-        if let result = try? await NoteEnhancementService()
-            .enhance(rawNotes: meeting.notes, transcript: transcript, template: template, identity: identity) {
-            meeting.enhancedNotes = result.markdown
-            meeting.noteBlocks = result.blocks
+        if let enhanced = try? await enhanceResult {
+            meeting.enhancedNotes = enhanced.markdown
+            meeting.noteBlocks = enhanced.blocks
         }
 
         // Structured action items (task + owner + due).
@@ -335,6 +422,9 @@ final class RecordingCoordinator {
             context.insert(model)
         }
         meeting.audioPath = saveAudio(system: samples, mic: [], meetingID: meeting.id)
+
+        // Commit the transcript before the LLM step so it survives a crash/quit.
+        SafeStore.save(context, "transcript-saved")
 
         guard await summarizeAndEnhance(meeting: meeting, context: context) else { return }
         phase = .idle
@@ -521,8 +611,10 @@ final class RecordingCoordinator {
 
     private func startTimer() {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self, let start = self.startDate else { return }
+            // Read the main-actor-isolated state inside the hop, not in the
+            // Sendable timer closure (which can't safely touch actor state).
             Task { @MainActor in
+                guard let self, let start = self.startDate else { return }
                 self.elapsed = Date().timeIntervalSince(start)
             }
         }

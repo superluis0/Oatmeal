@@ -35,7 +35,9 @@ struct AnalyticsView: View {
         let a = analytics
         return GroupBox {
             if a.speakers.isEmpty {
-                Text("No speaker data.").font(.caption).foregroundStyle(Theme.textSecondary)
+                Text("No speaker breakdown yet — talk-time and coaching insights need a conversation with a couple of speakers and a few minutes of transcript.")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Chart(a.speakers) { s in
                     BarMark(

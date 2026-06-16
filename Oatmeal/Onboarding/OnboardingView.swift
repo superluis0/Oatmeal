@@ -11,8 +11,9 @@ struct OnboardingView: View {
     @State private var devices = AudioDevices.inputDevices()
     @State private var lmState: LMState = .untested
     @State private var testingLM = false
+    @State private var userName = AppSettings.userName
 
-    private let stepCount = 5
+    private let stepCount = 4
 
     enum LMState: Equatable { case untested, testing, ok(Int), failed }
 
@@ -26,9 +27,8 @@ struct OnboardingView: View {
                 Group {
                     switch step {
                     case 0: welcomeStep
-                    case 1: howItWorksStep
-                    case 2: permissionsStep
-                    case 3: micStep
+                    case 1: permissionsStep
+                    case 2: micStep
                     default: lmStep
                     }
                 }
@@ -64,26 +64,34 @@ struct OnboardingView: View {
 
     private var welcomeStep: some View {
         VStack(spacing: Theme.Space.lg) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable().frame(width: 108, height: 108)
-                .shadow(color: Theme.accent.opacity(0.35), radius: 24, y: 10)
             VStack(spacing: Theme.Space.sm) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable().frame(width: 84, height: 84)
+                    .shadow(color: Theme.accent.opacity(0.35), radius: 20, y: 8)
                 Text("Welcome to Oatmeal")
-                    .font(.system(size: Appearance.shared.scaled(40), weight: .bold))
-                Text("Your cozy, on-device meeting notetaker. It listens, transcribes, and writes beautiful notes — all privately on your Mac.")
+                    .font(.system(size: Appearance.shared.scaled(34), weight: .bold))
+                Text("Your cozy, on-device meeting notetaker — it listens, transcribes, and writes beautiful notes, all privately on your Mac.")
                     .font(.system(.title3))
                     .foregroundStyle(Theme.textSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            OatPill(text: "100% on-device · nothing leaves your Mac", systemImage: "lock.fill")
-                .padding(.top, Theme.Space.xs)
-        }
-    }
-
-    private var howItWorksStep: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.lg) {
-            stepHeader("How Oatmeal works", "Three steps to effortless notes.")
+            // Ask the name up front: it grounds "Me" in transcripts/summaries and
+            // lets recaps + chat address the user, instead of a generic "Speaker".
+            VStack(spacing: 6) {
+                Text("What should we call you?")
+                    .font(.caption).foregroundStyle(Theme.textTertiary)
+                TextField("Your name", text: $userName)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.center)
+                    .font(.system(.title3))
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, Theme.Space.lg)
+                    .frame(maxWidth: 280)
+                    .background(Theme.surfaceAlt, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.border, lineWidth: 1))
+                    .onChange(of: userName) { _, new in AppSettings.userName = new.trimmingCharacters(in: .whitespaces) }
+            }
             VStack(spacing: Theme.Space.sm) {
                 featureRow("record.circle.fill", "Record any meeting",
                            "Captures the other people (system audio) and your mic — no bots, no links.")
@@ -92,6 +100,7 @@ struct OnboardingView: View {
                 featureRow("bubble.left.and.text.bubble.right.fill", "Ask anything later",
                            "Chat across one meeting or your whole history, with sources.")
             }
+            OatPill(text: "100% on-device · nothing leaves your Mac", systemImage: "lock.fill")
         }
     }
 

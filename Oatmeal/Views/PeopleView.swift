@@ -36,16 +36,18 @@ struct PeopleView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        // Build the directory once per render (it was computed twice — isEmpty + List).
+        let directory = people
+        return NavigationStack {
             Group {
-                if people.isEmpty {
+                if directory.isEmpty {
                     OatEmptyState(
                         icon: "person.2",
                         title: "No people yet",
                         message: "Attendees from your calendar meetings will appear here."
                     )
                 } else {
-                    List(people) { person in
+                    List(directory) { person in
                         NavigationLink(value: person) {
                             HStack(spacing: Theme.Space.sm) {
                                 IconBadge(systemName: "person.fill", size: 30)
@@ -95,11 +97,15 @@ struct PersonPage: View {
     }
 
     var body: some View {
-        ScrollView {
+        // Compute the O(N×M) aggregates once per render, then thread them through the
+        // sub-views — instead of recomputing inside each section's body.
+        let meetings = meetings
+        let commitments = commitments
+        return ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.lg) {
-                header
-                if !commitments.isEmpty { commitmentsSection }
-                meetingsSection
+                header(meetings, commitments)
+                if !commitments.isEmpty { commitmentsSection(commitments) }
+                meetingsSection(meetings)
             }
             .padding(Theme.Space.lg)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -108,7 +114,7 @@ struct PersonPage: View {
         .navigationTitle(person.name)
     }
 
-    private var header: some View {
+    private func header(_ meetings: [Meeting], _ commitments: [ActionItem]) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             HStack(spacing: Theme.Space.sm) {
                 stat("\(meetings.count)", "meetings")
@@ -135,7 +141,7 @@ struct PersonPage: View {
         .oatCard(padding: Theme.Space.sm)
     }
 
-    private var commitmentsSection: some View {
+    private func commitmentsSection(_ commitments: [ActionItem]) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             SectionLabel(text: "Open commitments")
             VStack(spacing: 0) {
@@ -150,7 +156,7 @@ struct PersonPage: View {
         }
     }
 
-    private var meetingsSection: some View {
+    private func meetingsSection(_ meetings: [Meeting]) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             SectionLabel(text: "Meetings together")
             ForEach(meetings) { m in

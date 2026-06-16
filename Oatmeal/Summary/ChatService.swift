@@ -39,6 +39,35 @@ struct ChatService {
         groundedContext: String,
         history: [(role: String, text: String)]
     ) async throws -> String {
+        let messages = groundedMessages(question: question, groundedContext: groundedContext, history: history)
+        return try await client.chat(messages: messages, temperature: 0.3)
+    }
+
+    /// Streaming variant of `answerGrounded`: delivers the reply token-by-token via
+    /// `onToken` (on the main actor) so it feels instant, and falls back to a single
+    /// blocking request on servers that don't support streaming — so chat works either
+    /// way, and the fallback only fires when nothing was streamed (no double output).
+    func answerGroundedStreaming(
+        question: String,
+        groundedContext: String,
+        history: [(role: String, text: String)],
+        onToken: @escaping @MainActor (String) -> Void
+    ) async throws -> String {
+        let messages = groundedMessages(question: question, groundedContext: groundedContext, history: history)
+        do {
+            return try await client.chatStreaming(messages: messages, temperature: 0.3, onToken: onToken)
+        } catch {
+            let full = try await client.chat(messages: messages, temperature: 0.3)
+            await onToken(full)
+            return full
+        }
+    }
+
+    private func groundedMessages(
+        question: String,
+        groundedContext: String,
+        history: [(role: String, text: String)]
+    ) -> [LMStudioMessage] {
         let system = """
         You are answering questions about ONE specific meeting. All of that
         meeting's material — its notes, key points, and transcript — is provided
@@ -67,8 +96,7 @@ struct ChatService {
             messages.append(.init(role: turn.role, content: turn.text))
         }
         messages.append(.user(question))
-
-        return try await client.chat(messages: messages, temperature: 0.3)
+        return messages
     }
 
     /// Answers across multiple meetings. `context` is a pre-assembled block where

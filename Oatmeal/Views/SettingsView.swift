@@ -186,6 +186,27 @@ struct SettingsView: View {
                 Text("Global hotkeys work from any app — start a recording without leaving your meeting.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Divider()
+                ForEach([
+                    ("Command palette", "⌘K"),
+                    ("Ask across meetings", "⌘⇧A"),
+                    ("Upcoming", "⌘⇧U"),
+                    ("Tasks", "⌘⇧T"),
+                    ("People", "⌘⇧P"),
+                    ("Digest", "⌘⇧D"),
+                    ("Import audio…", "⌘⇧I"),
+                ], id: \.0) { item in
+                    HStack {
+                        Text(item.0)
+                        Spacer()
+                        Text(item.1)
+                            .font(.system(.body, design: .rounded).weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("Tip: press ⌘K to jump to any meeting or run any command.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Audio") {

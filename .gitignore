@@ -32,6 +32,20 @@ Package.resolved
 # binaries are uploaded to GitHub Releases, not git. See release.sh.
 /dist/
 
+# Signing material / local secrets
+*.p12
+*.p8
+*.pem
+*.key
+*.cer
+*.cert
+*.mobileprovision
+*.provisionprofile
+ExportOptions.plist
+key.priv
+.env
+.env.*
+
 # Local tooling / editor config
 .claude/
 .vscode/

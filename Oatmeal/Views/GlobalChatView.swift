@@ -126,7 +126,7 @@ struct GlobalChatView: View {
                 Button { input = s; Task { await send() } } label: {
                     Label(s, systemImage: "sparkle")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(OatGhostButton())
             }
         }
     }

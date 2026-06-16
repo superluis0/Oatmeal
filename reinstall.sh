@@ -27,15 +27,16 @@ ensure_signing_identity() {
   fi
   echo "▸ Creating stable self-signed signing certificate…"
   local work; work=$(mktemp -d)
+  local p12_password; p12_password="$(openssl rand -base64 32)"
+  trap 'rm -rf "$work"; trap - RETURN' RETURN
   openssl req -newkey rsa:2048 -nodes -keyout "$work/key.pem" -x509 -days 3650 -out "$work/cert.pem" \
     -subj "/CN=$SIGN_IDENTITY" \
     -addext "basicConstraints=critical,CA:FALSE" \
     -addext "keyUsage=critical,digitalSignature" \
     -addext "extendedKeyUsage=critical,codeSigning" 2>/dev/null
   openssl pkcs12 -export -macalg sha1 -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES \
-    -inkey "$work/key.pem" -in "$work/cert.pem" -out "$work/cert.p12" -passout pass:oatmeal -name "$SIGN_IDENTITY" 2>/dev/null
-  security import "$work/cert.p12" -k "$keychain" -P oatmeal -A -T /usr/bin/codesign >/dev/null 2>&1
-  rm -rf "$work"
+    -inkey "$work/key.pem" -in "$work/cert.pem" -out "$work/cert.p12" -passout "pass:$p12_password" -name "$SIGN_IDENTITY" 2>/dev/null
+  security import "$work/cert.p12" -k "$keychain" -P "$p12_password" -A -T /usr/bin/codesign >/dev/null 2>&1
 }
 
 # Build a scheme; on the known stale explicit-modules failure, wipe the module

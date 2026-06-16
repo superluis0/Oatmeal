@@ -12,6 +12,7 @@ struct TasksView: View {
     @State private var quickAdd = ""
     @State private var ownerFilter: String? = nil
     @State private var showDone = false
+    @State private var clearedTick = 0
 
     private var owners: [String] {
         Array(Set(items.compactMap { $0.owner }.filter { !$0.isEmpty })).sorted()
@@ -66,6 +67,11 @@ struct TasksView: View {
         }
         .background(Theme.bg)
         .navigationTitle("Tasks")
+        .onChange(of: openCount) { old, new in
+            // Clearing your last open task is a genuine "inbox zero" moment.
+            if old > 0, new == 0 { clearedTick += 1 }
+        }
+        .celebration(trigger: clearedTick)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {

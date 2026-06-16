@@ -19,6 +19,9 @@ struct UpcomingView: View {
         Group {
             if !authorized {
                 accessPrompt
+            } else if meetings.isEmpty && loading {
+                ProgressView("Loading…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if meetings.isEmpty && !loading {
                 OatEmptyState(
                     icon: "calendar",

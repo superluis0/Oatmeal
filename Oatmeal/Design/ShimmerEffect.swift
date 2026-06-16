@@ -42,7 +42,9 @@ struct ShimmerModifier: ViewModifier {
     /// A bright, soft band that travels left→right across the content, masked to
     /// the content's own shape so the highlight only paints where there's a view.
     private var sweep: some View {
-        TimelineView(.animation) { context in
+        // 30fps is plenty for a soft sweep and avoids driving a full-rate redraw
+        // (including the inner GeometryReader) for the whole time content loads.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
             // 0…1 progress through a steady ~1.4s cycle.
             let period = 1.4
             let t = context.date.timeIntervalSinceReferenceDate

@@ -32,9 +32,23 @@ enum StoreBackup {
         let payload: [String: Any] = ["version": version, "meetings": meetings.map(encode)]
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) else { return }
 
+        // The model reads + JSON encode above need the main actor, but the file
+        // system work (dir create, previous-generation copy, atomic write) is pure
+        // I/O on Sendable values — run it on a serial background queue so the main
+        // thread isn't blocked on disk latency at launch or after each meeting. The
+        // queue is serial, so snapshots still land in call order.
+        let prev = prevSnapshotURL
+        ioQueue.async { writeSnapshot(data, to: url, backupDir: backupDir, prevURL: prev) }
+    }
+
+    private static let ioQueue = DispatchQueue(label: "com.oatmeal.backup-io", qos: .utility)
+
+    /// Performs the snapshot's disk I/O off the main actor. Pure file operations on
+    /// Sendable inputs — touches no SwiftData model.
+    nonisolated private static func writeSnapshot(_ data: Data, to url: URL, backupDir: URL, prevURL: URL?) {
         try? FileManager.default.createDirectory(at: backupDir, withIntermediateDirectories: true)
         // Keep one previous generation as a second safety net.
-        if let prev = prevSnapshotURL, FileManager.default.fileExists(atPath: url.path) {
+        if let prev = prevURL, FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.removeItem(at: prev)
             try? FileManager.default.copyItem(at: url, to: prev)
         }

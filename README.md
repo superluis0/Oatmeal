@@ -163,6 +163,12 @@ identity** so macOS remembers your Mic and Screen-Recording grants across rebuil
 > leaks into your mic, which can duplicate transcript lines. Oatmeal de-duplicates this echo
 > automatically, but headphones eliminate it at the source.
 
+> 🖥️ **Screen Recording needs a relaunch to take effect.** macOS only applies a new Screen Recording
+> grant after the app restarts — and Oatmeal keeps running in the menu bar, so **fully quit** it
+> (menu-bar icon → Quit) and reopen after enabling it. If the other participants still aren't being
+> captured, Oatmeal shows a clear "only your microphone is recording" warning (in-app and on the
+> floating panel) instead of quietly saving a one-sided transcript.
+
 <br/>
 
 ## 🔒 Privacy

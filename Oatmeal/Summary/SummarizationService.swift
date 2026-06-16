@@ -74,12 +74,19 @@ struct SummarizationService {
             }
         }
         guard !partials.isEmpty else {
-            // Couldn't map — fall back to a single bounded pass.
-            let user = "Meeting transcript (speaker-labeled):\n\n\(truncateTranscript(transcript))"
+            // Couldn't map (e.g. the server dropped every window) — fall back to a
+            // single bounded pass, and flag it if that truncated a long transcript so
+            // the summary doesn't look complete when it isn't.
+            let bounded = truncateTranscript(transcript)
+            let user = "Meeting transcript (speaker-labeled):\n\n\(bounded)"
             let content = try await client.chat(
                 messages: [.system(systemPrompt(title: title, attendees: attendees, identity: identity)), .user(user)],
                 temperature: 0.45)
-            return parse(content)
+            var summary = parse(content)
+            if bounded.count < transcript.count {
+                summary.text += "\n\n_(This meeting was too long to summarize in full on the current model — these notes cover the start and end.)_"
+            }
+            return summary
         }
 
         let combined = partials.joined(separator: "\n\n")

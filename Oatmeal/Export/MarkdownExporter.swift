@@ -45,7 +45,11 @@ enum MarkdownExporter {
         panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
         panel.nameFieldStringValue = sanitized(meeting.title) + ".md"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? markdown(for: meeting).write(to: url, atomically: true, encoding: .utf8)
+        do {
+            try markdown(for: meeting).write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            reportFailure("Couldn't save the file: \(error.localizedDescription)")
+        }
     }
 
     static func exportPDF(_ meeting: Meeting) {
@@ -68,7 +72,9 @@ enum MarkdownExporter {
         let op = NSPrintOperation(view: textView, printInfo: info)
         op.showsPrintPanel = false
         op.showsProgressPanel = false
-        op.run()
+        if !op.run() {
+            reportFailure("Couldn't create the PDF.")
+        }
     }
 
     /// Exports one Markdown file per meeting (with YAML frontmatter) into a folder —
@@ -79,10 +85,28 @@ enum MarkdownExporter {
         panel.canChooseFiles = false
         panel.prompt = "Export Here"
         guard panel.runModal() == .OK, let dir = panel.url else { return }
+        var failures = 0
         for m in meetings {
             let url = dir.appendingPathComponent(sanitized(m.title) + ".md")
-            try? markdownWithFrontmatter(m).write(to: url, atomically: true, encoding: .utf8)
+            do {
+                try markdownWithFrontmatter(m).write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                failures += 1
+                Log.error("vault export failed for \(m.title)", "export", error)
+            }
         }
+        if failures > 0 {
+            reportFailure("\(failures) of \(meetings.count) meeting\(meetings.count == 1 ? "" : "s") couldn't be written — check the folder's permissions and free space.")
+        }
+    }
+
+    /// Surfaces an export failure with an alert instead of letting it vanish silently.
+    private static func reportFailure(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Export failed"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     private static func markdownWithFrontmatter(_ meeting: Meeting) -> String {

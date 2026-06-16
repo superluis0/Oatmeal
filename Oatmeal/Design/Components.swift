@@ -272,6 +272,7 @@ struct SnakeBorder: View {
 
 /// A gently pulsing red dot for the live-recording state.
 struct PulsingDot: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var animating = false
     var body: some View {
         Circle()
@@ -283,6 +284,8 @@ struct PulsingDot: View {
                     .opacity(animating ? 0 : 0.7)
             )
             .onAppear {
+                // Respect Reduce Motion: leave the ring static instead of looping.
+                guard !reduceMotion else { return }
                 withAnimation(.easeOut(duration: 1.3).repeatForever(autoreverses: false)) {
                     animating = true
                 }

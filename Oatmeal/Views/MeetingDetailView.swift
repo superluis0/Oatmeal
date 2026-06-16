@@ -12,7 +12,9 @@ struct RecordingView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let warning = coordinator.captureWarning {
+            if coordinator.systemAudioMissing {
+                systemAudioMissingCard
+            } else if let warning = coordinator.captureWarning {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     Text(warning).font(.caption)
@@ -20,6 +22,16 @@ struct RecordingView: View {
                 }
                 .padding(.horizontal).padding(.vertical, 6)
                 .background(.orange.opacity(0.12))
+            }
+            if coordinator.isRecording && coordinator.elapsed > 7200 {
+                HStack(spacing: 6) {
+                    Image(systemName: "hourglass").foregroundStyle(.orange)
+                    Text("Long session — very long recordings use more memory; consider stopping soon and starting a fresh one.")
+                        .font(.caption2).foregroundStyle(Theme.textSecondary)
+                    Spacer()
+                }
+                .padding(.horizontal).padding(.vertical, 4)
+                .background(.orange.opacity(0.10))
             }
             Divider()
             if coordinator.liveSegments.isEmpty {
@@ -47,6 +59,29 @@ struct RecordingView: View {
             }
         }
         .navigationTitle(coordinator.activeMeeting?.title ?? "Recording")
+    }
+
+    /// Hard-to-miss warning that the other participants aren't being captured —
+    /// shown in place of the soft strip when system audio is unavailable on a
+    /// remote call, where it's the whole point.
+    private var systemAudioMissingCard: some View {
+        HStack(alignment: .top, spacing: Theme.Space.sm) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.danger)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Only your microphone is recording")
+                    .font(.subheadline.weight(.semibold))
+                Text("Screen Recording is off, so the other participants aren't being captured. Stop, enable it in System Settings → Privacy & Security → Screen & System Audio Recording, then fully quit and reopen Oatmeal.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Open Settings") { coordinator.openScreenRecordingSettings() }
+                .buttonStyle(OatSecondaryButton())
+        }
+        .padding(Theme.Space.md)
+        .background(Theme.danger.opacity(0.12))
     }
 
     @ViewBuilder
@@ -246,6 +281,9 @@ struct MeetingDetailView: View {
     }
 
     @State private var tab: DetailTab = .enhanced
+    /// Cached so the stale banner doesn't re-hash the whole transcript on every
+    /// render; refreshed via `.task(id: stalenessKey)` on the summary section.
+    @State private var isSummaryStale = false
     /// Drives the sliding selection indicator in the custom segmented tab control.
     @Namespace private var tabIndicator
     @State private var isEnhancing = false
@@ -338,6 +376,10 @@ struct MeetingDetailView: View {
             VStack(alignment: .leading, spacing: Theme.Space.lg) {
                 titleSection
                 summarySection
+                if meeting.liveSummary == nil, !meeting.segments.isEmpty,
+                   let coordinator, !coordinator.isBusy {
+                    missingSummaryBanner(coordinator)
+                }
                 recurringSection
                 highlightsSection
                 OatSegmentedTabs(selection: $tab,
@@ -414,12 +456,16 @@ struct MeetingDetailView: View {
         }
         .sheet(isPresented: $showFollowUpSheet) { followUpSheet }
         .sheet(isPresented: $showTriage) {
-            MeetingTriageView(meeting: meeting) {
-                showTriage = false
-                if let recipe = RecipeProvider.builtins.first(where: { $0.isEmail }) {
-                    Task { await runRecipe(recipe) }
-                }
-            }
+            MeetingTriageView(
+                meeting: meeting,
+                onEmailRecap: {
+                    showTriage = false
+                    if let recipe = RecipeProvider.builtins.first(where: { $0.isEmail }) {
+                        Task { await runRecipe(recipe) }
+                    }
+                },
+                onDone: { showToast("Meeting wrapped up ✓") }
+            )
         }
         .onAppear {
             if autoWrapUp {
@@ -618,6 +664,19 @@ struct MeetingDetailView: View {
         try? context.save()
     }
 
+    /// Cheap signal that changes whenever the summary could go stale, so the
+    /// full-transcript hash behind `summaryIsStale` only recomputes when needed
+    /// rather than on every render. Segment count + summed text lengths catch
+    /// edits/merges; the speaker-name map catches renames; the stored signature
+    /// catches (re)generation.
+    private var stalenessKey: String {
+        guard meeting.isAlive, !meeting.isDeleted else { return "dead" }
+        let textLen = meeting.segments.reduce(0) { $0 + $1.text.count }
+        let names = meeting.speakerNames.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+        return "\(meeting.segments.count)|\(textLen)|\(names)|\(meeting.summary?.transcriptSignature ?? "-")"
+    }
+
     @ViewBuilder
     private var summarySection: some View {
         // Guard against a model that was deleted out from under the view (e.g. the
@@ -630,7 +689,7 @@ struct MeetingDetailView: View {
            let summary = meeting.summary, !summary.isDeleted, summary.modelContext != nil {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
-                    if meeting.summaryIsStale, let coordinator {
+                    if isSummaryStale, let coordinator {
                         summaryStaleBanner(coordinator)
                     }
                     if !summary.text.isEmpty {
@@ -655,6 +714,14 @@ struct MeetingDetailView: View {
                 .padding(8)
             } label: {
                 Label("Summary", systemImage: "sparkles")
+            }
+            // Recompute staleness only when the transcript actually changes (keyed
+            // on a cheap signal) instead of hashing the whole transcript per render.
+            // Guard the async read: touching a model deleted out from under the task
+            // traps with SIGTRAP (the exact crash class this moved off the render path).
+            .task(id: stalenessKey) {
+                guard meeting.isAlive, !meeting.isDeleted else { return }
+                isSummaryStale = meeting.summaryIsStale
             }
         }
     }
@@ -684,6 +751,35 @@ struct MeetingDetailView: View {
         .padding(8)
         .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
         .foregroundStyle(Theme.accent)
+    }
+
+    /// Shown when a finished recording has a transcript but no summary — e.g. LM
+    /// Studio was offline when it was recorded. The transcript is safe; this turns a
+    /// dead end into a one-tap retry instead of a buried Follow-up menu item.
+    private func missingSummaryBanner(_ coordinator: RecordingCoordinator) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Transcript saved — no summary yet")
+                    .font(.subheadline.weight(.semibold))
+                Text("The summary couldn't be generated. Make sure LM Studio is running with a model loaded, then try again.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    Task { await coordinator.regenerateSummary(for: meeting, context: context) }
+                } label: {
+                    Label("Generate summary", systemImage: "sparkles")
+                }
+                .buttonStyle(OatPrimaryButton())
+                .disabled(coordinator.isBusy)
+                .padding(.top, 2)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(Theme.Space.md)
+        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
     }
 
     private func seriesMatches(_ other: Meeting) -> Bool {
@@ -953,7 +1049,7 @@ struct MeetingDetailView: View {
                 .foregroundStyle(.secondary)
         } else {
             GroupBox {
-                VStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: 12) {
                     HStack {
                         if meeting.audioPath != nil && player.duration > 0 {
                             playerBar
@@ -985,11 +1081,10 @@ struct MeetingDetailView: View {
                             // appears. Pure opacity (no rise) so the reveal never
                             // fights the programmatic scrollTo / jumpTarget anchor;
                             // guarded internally so it fires once, not on scroll.
-                            .appearReveal(
-                                reduceMotion: reduceMotion,
-                                delay: Reveal.staggerDelay(idx, reduceMotion: reduceMotion),
-                                rise: false
-                            )
+                            // No per-row stagger: rows are created lazily as they
+                            // scroll in, so an index-based delay would make later
+                            // rows fade in late. A plain one-shot fade stays instant.
+                            .appearReveal(reduceMotion: reduceMotion, rise: false)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

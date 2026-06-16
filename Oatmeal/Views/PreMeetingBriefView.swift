@@ -68,9 +68,12 @@ struct PreMeetingBriefView: View {
                     if !openItems.isEmpty { openItemsSection }
                     if !relatedByPeople.isEmpty { historySection }
                     if priorOccurrences.isEmpty && openItems.isEmpty && relatedByPeople.isEmpty {
-                        Text("No prior history with this meeting or these people yet — Oatmeal will build it as you record.")
-                            .font(.caption)
-                            .foregroundStyle(Theme.textSecondary)
+                        OatEmptyState(
+                            icon: "sparkles",
+                            title: "Fresh start",
+                            message: "No history with this meeting or these people yet — Oatmeal will build it as you record."
+                        )
+                        .padding(.top, Theme.Space.md)
                     }
                 }
                 .padding(Theme.Space.lg)

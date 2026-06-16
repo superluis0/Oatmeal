@@ -23,13 +23,11 @@ struct MeetingListView: View {
     @Environment(\.modelContext) private var context
     @State private var updateChecker = UpdateChecker.shared
 
-    private var openTaskCount: Int {
-        meetings.reduce(0) { total, meeting in
-            // Skip any meeting that's been deleted out from under the @Query
-            // snapshot — touching its relationships would trap in SwiftData.
-            meeting.modelContext != nil ? total + meeting.openActionItemCount : total
-        }
-    }
+    /// Open-task badge count, maintained by SwiftData rather than recomputed by
+    /// reducing over every meeting's action items on each render (which fired on
+    /// every audio frame during recording). Matches the Tasks view's notion of
+    /// "open" (not done) and mirrors its `@Query`-then-count approach.
+    @Query(filter: #Predicate<ActionItem> { !$0.isDone }) private var openActionItems: [ActionItem]
 
     @State private var showNewFolder = false
     @State private var newFolderName = ""
@@ -48,7 +46,7 @@ struct MeetingListView: View {
                 HStack(spacing: Theme.Space.xs) {
                     SidebarChip(title: "Upcoming", systemImage: "calendar", action: onUpcoming)
                     SidebarChip(title: "Ask", systemImage: "sparkles", action: onAskOatmeal)
-                    SidebarChip(title: "Tasks", systemImage: "checklist", badge: openTaskCount, action: onTasks)
+                    SidebarChip(title: "Tasks", systemImage: "checklist", badge: openActionItems.count, action: onTasks)
                     SidebarChip(title: "People", systemImage: "person.2", action: onPeople)
                 }
                 HStack(spacing: Theme.Space.xs) {
@@ -80,6 +78,18 @@ struct MeetingListView: View {
                 }
             }
             .scrollContentBackground(.hidden)
+            .overlay {
+                // A warm first-run nudge instead of a blank list.
+                if meetings.isEmpty && !coordinator.isRecording && !coordinator.isBusy {
+                    OatEmptyState(
+                        icon: "waveform",
+                        title: "No meetings yet",
+                        message: "Press ⌘R or tap New Recording above to capture your first."
+                    )
+                    .padding()
+                    .allowsHitTesting(false)
+                }
+            }
 
             Divider().overlay(Theme.hairline)
             SettingsLink {

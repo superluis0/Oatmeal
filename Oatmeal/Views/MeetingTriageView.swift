@@ -9,11 +9,14 @@ struct MeetingTriageView: View {
     /// Called when the user chooses to email the recap (parent closes this sheet
     /// and runs the email recipe).
     var onEmailRecap: () -> Void
+    /// Called when the user finishes via "Done" (not the X) — a gentle closing beat.
+    var onDone: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 
     @State private var step = 0
     @State private var quickAdd = ""
+    @State private var newRecipientEmail = ""
     /// Decided once on appear so confirming names mid-flow doesn't reshuffle steps.
     @State private var includeSpeakers: Bool? = nil
     @State private var player = AudioPlayer()
@@ -25,7 +28,11 @@ struct MeetingTriageView: View {
     private var steps: [TriageStep] {
         var s: [TriageStep] = []
         if includeSpeakers ?? meeting.needsSpeakerConfirmation { s.append(.speakers) }
-        s += [.review, .tasks, .recap]
+        // Skip the summary review when there's nothing to review (e.g. the summary
+        // failed because LM Studio was offline) — don't drop the user into an empty
+        // step. The detail view's retry banner is the path back to a summary.
+        if let summary = meeting.liveSummary, !summary.text.isEmpty { s.append(.review) }
+        s += [.tasks, .recap]
         return s
     }
 
@@ -258,10 +265,49 @@ struct MeetingTriageView: View {
             .buttonStyle(OatSecondaryButton())
 
             if meeting.liveAttendees.compactMap(\.email).isEmpty {
-                Text("No attendee emails on file — add them on the meeting to enable email recap.")
-                    .font(.caption).foregroundStyle(Theme.textSecondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No attendee emails yet — add one to enable the email recap.")
+                        .font(.caption).foregroundStyle(Theme.textSecondary)
+                    HStack(spacing: Theme.Space.sm) {
+                        Image(systemName: "envelope").foregroundStyle(Theme.textSecondary)
+                        TextField("name@example.com", text: $newRecipientEmail)
+                            .textFieldStyle(.plain)
+                            .onSubmit(addRecipientEmail)
+                        if isValidEmail(newRecipientEmail) {
+                            Button("Add", action: addRecipientEmail).buttonStyle(OatSecondaryButton())
+                        }
+                    }
+                    .padding(Theme.Space.sm)
+                    .background(Theme.surfaceAlt, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+                }
             }
         }
+    }
+
+    /// Adds an email so the recap can be sent for an ad-hoc meeting (one with no
+    /// attendees from a calendar invite). Fills the first email-less attendee, or
+    /// creates a new attendee, then persists.
+    private func addRecipientEmail() {
+        let email = newRecipientEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isValidEmail(email) else { return }
+        if let target = meeting.liveAttendees.first(where: { ($0.email ?? "").isEmpty }) {
+            target.email = email
+        } else {
+            let name = email.components(separatedBy: "@").first ?? email
+            let attendee = Attendee(name: name, email: email)
+            context.insert(attendee)
+            attendee.meeting = meeting
+        }
+        try? context.save()
+        newRecipientEmail = ""
+    }
+
+    /// Minimal sanity check: one "@" with text before it and a dotted domain after.
+    private func isValidEmail(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        guard let at = t.firstIndex(of: "@"), at != t.startIndex else { return false }
+        let domain = t[t.index(after: at)...]
+        return domain.contains(".") && !domain.hasSuffix(".") && !domain.hasPrefix(".")
     }
 
     // MARK: Footer
@@ -275,7 +321,7 @@ struct MeetingTriageView: View {
             if step < steps.count - 1 {
                 Button("Next") { withAnimation { step += 1 } }.buttonStyle(OatPrimaryButton())
             } else {
-                Button("Done") { dismiss() }.buttonStyle(OatPrimaryButton())
+                Button("Done") { onDone(); dismiss() }.buttonStyle(OatPrimaryButton())
             }
         }
         .padding(Theme.Space.md)

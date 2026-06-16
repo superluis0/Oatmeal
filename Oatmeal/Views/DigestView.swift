@@ -50,6 +50,12 @@ struct DigestView: View {
                             .padding(8)
                     } label: { Label("Digest", systemImage: "doc.text.magnifyingglass") }
                     includedList
+                } else if !generating {
+                    OatEmptyState(
+                        icon: "doc.text.magnifyingglass",
+                        title: "Cross-meeting digest",
+                        message: "Themes, open decisions, key action items, and follow-ups — synthesized across the meetings you've scoped above."
+                    )
                 }
             }
             .padding(Theme.Space.lg)

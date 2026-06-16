@@ -32,6 +32,19 @@ struct LMStudioClient {
     var baseURL: String = AppSettings.baseURL
     var explicitModel: String = AppSettings.model
 
+    /// Process-wide cache of the auto-discovered model id, keyed by base URL, so a
+    /// burst of calls (e.g. the up-to-8 windows of a long-transcript map-reduce)
+    /// doesn't hit `/v1/models` every time. Bypassed when an explicit model is set
+    /// in Settings, and cleared on a failed call so a model swapped in LM Studio
+    /// self-heals on the next attempt.
+    private actor ModelDiscoveryCache {
+        private var byURL: [String: String] = [:]
+        func get(_ url: String) -> String? { byURL[url] }
+        func set(_ url: String, _ model: String) { byURL[url] = model }
+        func clear() { byURL.removeAll() }
+    }
+    private static let discoveryCache = ModelDiscoveryCache()
+
     /// Sends a chat completion and returns the assistant message content.
     func chat(messages: [LMStudioMessage], temperature: Double = 0.3) async throws -> String {
         let model = try await resolveModel()
@@ -41,7 +54,74 @@ struct LMStudioClient {
             "temperature": temperature,
             "stream": false
         ]
-        return try await postChatCompletion(payload)
+        do {
+            return try await postChatCompletion(payload)
+        } catch {
+            // A stale auto-discovered model would fail every call — drop the cache
+            // so the next attempt re-discovers the currently loaded model.
+            if explicitModel.trimmingCharacters(in: .whitespaces).isEmpty {
+                await Self.discoveryCache.clear()
+            }
+            throw error
+        }
+    }
+
+    /// Streams a chat completion, delivering each text delta to `onToken` (on the
+    /// main actor) as it arrives and returning the full text. Throws *without*
+    /// emitting only when nothing could be streamed, so a caller can cleanly fall
+    /// back to the blocking `chat(...)` on servers that don't support SSE. If the
+    /// stream drops mid-reply, whatever arrived so far is returned.
+    func chatStreaming(
+        messages: [LMStudioMessage],
+        temperature: Double = 0.3,
+        onToken: @escaping @MainActor (String) -> Void
+    ) async throws -> String {
+        let model = try await resolveModel()
+        let payload: [String: Any] = [
+            "model": model,
+            "messages": messages.map { ["role": $0.role, "content": $0.content] },
+            "temperature": temperature,
+            "stream": true
+        ]
+        let url = try makeURL("/v1/chat/completions")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        request.timeoutInterval = 300
+
+        let (bytes, response): (URLSession.AsyncBytes, URLResponse)
+        do {
+            (bytes, response) = try await URLSession.shared.bytes(for: request)
+        } catch {
+            throw LMStudioError.serverUnreachable
+        }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw LMStudioError.badResponse("Streaming request failed")
+        }
+
+        var full = ""
+        do {
+            for try await line in bytes.lines {
+                // Server-sent events: "data: {json}" per chunk, ending with "data: [DONE]".
+                guard line.hasPrefix("data:") else { continue }
+                let chunk = line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+                if chunk == "[DONE]" { break }
+                guard let data = chunk.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let choices = obj["choices"] as? [[String: Any]],
+                      let delta = choices.first?["delta"] as? [String: Any],
+                      let piece = delta["content"] as? String, !piece.isEmpty else { continue }
+                full += piece
+                await onToken(piece)
+            }
+        } catch {
+            // A mid-stream drop or cancellation — keep whatever already arrived.
+            if full.isEmpty { throw LMStudioError.serverUnreachable }
+        }
+        guard !full.isEmpty else { throw LMStudioError.badResponse("Empty streamed response") }
+        return full
     }
 
     /// IDs of currently loaded models.
@@ -80,9 +160,12 @@ struct LMStudioClient {
     private func resolveModel() async throws -> String {
         let explicit = explicitModel.trimmingCharacters(in: .whitespaces)
         if !explicit.isEmpty { return explicit }
+        let key = baseURL.trimmingCharacters(in: .whitespaces)
+        if let cached = await Self.discoveryCache.get(key) { return cached }
         guard let first = try await listModels().first else {
             throw LMStudioError.noModelLoaded
         }
+        await Self.discoveryCache.set(key, first)
         return first
     }
 

@@ -22,6 +22,24 @@ enum AppSettings {
     private static let userNameKey = "userName"
     private static let userTaglineKey = "userTagline"
     private static let checkForUpdatesKey = "checkForUpdates"
+    private static let modelsPreparedKey = "modelsPreparedBefore"
+
+    /// Set once the speech models have successfully prepared at least once, so a
+    /// later launch can prewarm them in the background without risking the large
+    /// first-run download before the user has chosen to record.
+    static var modelsPreparedBefore: Bool {
+        get { UserDefaults.standard.bool(forKey: modelsPreparedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: modelsPreparedKey) }
+    }
+
+    private static let lastCelebratedMilestoneKey = "lastCelebratedMilestone"
+    /// Highest meeting-count milestone already celebrated, so each one fires once
+    /// ever (deleting + re-recording can't replay it; existing users updating
+    /// mid-history won't get a retroactive blast).
+    static var lastCelebratedMilestone: Int {
+        get { UserDefaults.standard.integer(forKey: lastCelebratedMilestoneKey) }
+        set { UserDefaults.standard.set(newValue, forKey: lastCelebratedMilestoneKey) }
+    }
 
     /// Whether to check the GitHub repo for a newer release (~once/day). Default on.
     static var checkForUpdates: Bool {

@@ -9,15 +9,7 @@ struct DecisionsService {
     func decisions(_ inputs: [DigestInput], scopeLabel: String, transcriptDepth: Int = 8) async throws -> String {
         guard !inputs.isEmpty else { return "No meetings in this scope yet." }
 
-        var blocks: [String] = []
-        for (i, m) in inputs.enumerated() {
-            var block = "[#\(m.id) \(m.title)] (\(m.date))\nNotes: \(m.notes.prefix(700))"
-            if i < transcriptDepth {
-                block += "\nTranscript: \(truncateTranscript(m.transcript, maxChars: 2_500))"
-            }
-            blocks.append(block)
-        }
-        let context = blocks.joined(separator: "\n\n")
+        let (context, omitted) = DigestInput.buildContext(inputs, transcriptDepth: transcriptDepth)
 
         let system = """
         You extract DECISIONS from a set of meetings (\(scopeLabel)) — concrete
@@ -33,9 +25,10 @@ struct DecisionsService {
         \(context)
         """
 
-        return try await client.chat(
+        let result = try await client.chat(
             messages: [.system(system), .user("List the decisions.")],
             temperature: 0.3
         )
+        return DigestInput.trimNote(result, omitted: omitted)
     }
 }

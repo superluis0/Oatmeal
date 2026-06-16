@@ -8,6 +8,9 @@ struct MeetingChatView: View {
     @State private var input = ""
     @State private var isSending = false
     @State private var errorText: String?
+    /// The in-flight assistant reply being streamed in (nil when not streaming),
+    /// shown as a live bubble until it's persisted as a ChatMessage.
+    @State private var streamingReply: String?
 
     private let suggestions = [
         "Summarize the action items",
@@ -27,7 +30,11 @@ struct MeetingChatView: View {
                             ChatBubble(role: msg.role, text: msg.text)
                                 .id(msg.persistentModelID)
                         }
-                        if isSending {
+                        if let streamingReply, !streamingReply.isEmpty {
+                            ChatBubble(role: "assistant", text: streamingReply, streaming: true)
+                                .id("streaming")
+                        }
+                        if isSending, (streamingReply?.isEmpty ?? true) {
                             HStack {
                                 ProgressView().controlSize(.small)
                                 Text("Thinking…").foregroundStyle(.secondary)
@@ -41,6 +48,9 @@ struct MeetingChatView: View {
                     if let last = meeting.orderedChatMessages.last {
                         withAnimation { proxy.scrollTo(last.persistentModelID, anchor: .bottom) }
                     }
+                }
+                .onChange(of: streamingReply) { _, reply in
+                    if reply != nil { proxy.scrollTo("streaming", anchor: .bottom) }
                 }
             }
             Divider()
@@ -68,7 +78,7 @@ struct MeetingChatView: View {
                 } label: {
                     Label(s, systemImage: "sparkle")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(OatGhostButton())
                 .disabled(meeting.segments.isEmpty)
             }
         }
@@ -119,11 +129,14 @@ struct MeetingChatView: View {
         let grounded = MeetingContextBuilder.groundedContext(
             for: meeting, question: question, context: context)
 
+        streamingReply = ""
+        defer { streamingReply = nil }
         do {
-            let answer = try await ChatService().answerGrounded(
+            let answer = try await ChatService().answerGroundedStreaming(
                 question: question,
                 groundedContext: grounded,
-                history: history
+                history: history,
+                onToken: { piece in streamingReply = (streamingReply ?? "") + piece }
             )
             // The meeting may have been deleted during the await.
             guard meeting.modelContext != nil else { return }
@@ -140,6 +153,7 @@ struct MeetingChatView: View {
 struct ChatBubble: View {
     let role: String
     let text: String
+    var streaming: Bool = false
 
     private var isUser: Bool { role == "user" }
 
@@ -162,16 +176,25 @@ struct ChatBubble: View {
                         .background(Theme.accentGradient,
                                     in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
                 } else {
-                    MarkdownView(markdown: text)
-                        .foregroundStyle(Theme.textPrimary)
-                        .padding(.horizontal, Theme.Space.sm)
-                        .padding(.vertical, Theme.Space.xs)
-                        .background(Theme.surface,
-                                    in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                                .strokeBorder(Theme.border, lineWidth: 1)
-                        )
+                    Group {
+                        if streaming {
+                            // Plain text while streaming keeps it cheap — markdown
+                            // re-parses the whole string on every token; the persisted
+                            // message renders full markdown.
+                            Text(text)
+                        } else {
+                            MarkdownView(markdown: text)
+                        }
+                    }
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, Theme.Space.sm)
+                    .padding(.vertical, Theme.Space.xs)
+                    .background(Theme.surface,
+                                in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                            .strokeBorder(Theme.border, lineWidth: 1)
+                    )
                 }
             }
             .font(.system(size: 13 * Appearance.shared.fontScale))

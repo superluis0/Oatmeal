@@ -113,7 +113,11 @@ struct OatmealApp: App {
                 StoreBackup.snapshot(context: container.mainContext)
             }
         } else {
-            StoreBackup.snapshot(context: container.mainContext)
+            // Defer off the launch path so the snapshot (which now writes its bytes
+            // on a background queue) doesn't compete with first paint.
+            Task(priority: .utility) { @MainActor in
+                StoreBackup.snapshot(context: container.mainContext)
+            }
         }
         if let crash = Log.consumeLastCrash() {
             Log.warn("Previous session ended in a crash:\n\(crash)", "crash")
@@ -126,6 +130,13 @@ struct OatmealApp: App {
         // Prune old audio per the retention setting.
         if let meetings = try? container.mainContext.fetch(FetchDescriptor<Meeting>()) {
             StorageManager.pruneOldAudio(meetings: meetings, context: container.mainContext)
+        }
+
+        // Warm the speech models in the background so the first Record tap is
+        // instant — but only once they've downloaded before, so we never kick off
+        // the large first-run download before the user has chosen to record.
+        if AppSettings.modelsPreparedBefore {
+            coordinator.prewarm()
         }
 
         KeyboardShortcuts.onKeyUp(for: .toggleRecording) {
@@ -189,6 +200,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Stop (which saves audio + runs processing), then let the quit proceed.
                 Task { @MainActor in
                     await coord.stop(context: ctx)
+                    NSApp.reply(toApplicationShouldTerminate: true)
+                }
+                // Failsafe: if processing is slow or a hung LLM stalls stop(), don't
+                // wedge the app in "terminating" limbo. The transcript is already
+                // saved before processing, so a cut-off only skips the summary.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 120) {
                     NSApp.reply(toApplicationShouldTerminate: true)
                 }
                 return .terminateLater

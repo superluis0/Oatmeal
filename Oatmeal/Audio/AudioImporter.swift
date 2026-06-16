@@ -3,8 +3,30 @@ import AVFoundation
 
 /// Decodes a pre-recorded audio file to 16 kHz mono Float32 for transcription.
 enum AudioImporter {
+    enum ImportError: LocalizedError {
+        case tooLong(minutes: Int)
+        var errorDescription: String? {
+            switch self {
+            case .tooLong(let m):
+                return "This recording is about \(m) minutes long. Imports over 90 minutes aren't supported yet — split it into shorter files and import each."
+            }
+        }
+    }
+
+    /// ~90-minute cap: the whole file is decoded into memory at once, so a multi-hour
+    /// import would exhaust RAM and fail confusingly ("no audio found"). Guard upfront.
+    private static let maxImportSeconds: Double = 90 * 60
+
+    private static func ensureWithinLimit(_ file: AVAudioFile) throws {
+        let seconds = Double(file.length) / file.processingFormat.sampleRate
+        guard seconds <= maxImportSeconds else {
+            throw ImportError.tooLong(minutes: Int((seconds / 60).rounded()))
+        }
+    }
+
     static func loadMono16k(from url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
+        try ensureWithinLimit(file)
         let format = file.processingFormat
         let frameCount = AVAudioFrameCount(file.length)
         guard frameCount > 0,
@@ -23,6 +45,7 @@ enum AudioImporter {
     /// caller can still re-run, just without the Me/Others split.
     static func loadStereo16k(from url: URL) throws -> (system: [Float], mic: [Float]) {
         let file = try AVAudioFile(forReading: url)
+        try ensureWithinLimit(file)
         let format = file.processingFormat
         let frameCount = AVAudioFrameCount(file.length)
         guard frameCount > 0,

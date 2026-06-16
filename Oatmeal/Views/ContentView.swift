@@ -11,6 +11,11 @@ struct ContentView: View {
     @Query(sort: \Folder.createdAt) private var folders: [Folder]
     @State private var selection: Meeting?
     @State private var searchText = ""
+    /// Debounced mirror of `searchText` that actually drives filtering, so we don't
+    /// scan every meeting's transcript on each keystroke. Empty queries apply
+    /// immediately (instant clear); non-empty ones settle after a short pause.
+    @State private var debouncedSearch = ""
+    @State private var searchDebounce: Task<Void, Never>?
     @State private var showGlobalChat = false
     @State private var showPeople = false
     @State private var showTasks = false
@@ -25,6 +30,8 @@ struct ContentView: View {
     @State private var crashNotice: String?
     /// Monotonic counter that fires the meeting-saved celebration once per bump.
     @State private var celebrationTick = 0
+    /// The milestone card to show (with confetti) at meeting-count milestones.
+    @State private var milestone: MilestoneMessage?
 
     private func resetDestinations() {
         showGlobalChat = false; showPeople = false; showTasks = false
@@ -53,12 +60,12 @@ struct ContentView: View {
 
     private var filteredMeetings: [Meeting] {
         let meetings = visibleMeetings
-        let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
+        let q = debouncedSearch.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return meetings }
         if searchMode == .semantic && SemanticIndex.isAvailable {
             let index = SemanticIndex(context: context)
             index.ensureIndexed(meetings)
-            let ranked = index.search(searchText)
+            let ranked = index.search(debouncedSearch)
             var rank: [UUID: Int] = [:]
             for (i, id) in ranked.enumerated() { rank[id] = i }
             return meetings
@@ -91,6 +98,18 @@ struct ContentView: View {
             )
             .navigationSplitViewColumnWidth(min: 250, ideal: 280, max: 360)
             .searchable(text: $searchText, placement: .sidebar, prompt: "Search meetings")
+            .onChange(of: searchText) { _, newValue in
+                searchDebounce?.cancel()
+                let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                // Clearing applies instantly; a real query settles briefly so each
+                // keystroke doesn't trigger a fresh scan of every transcript.
+                if trimmed.isEmpty { debouncedSearch = ""; return }
+                searchDebounce = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 220_000_000)
+                    guard !Task.isCancelled else { return }
+                    debouncedSearch = newValue
+                }
+            }
             .searchScopes($searchMode) {
                 Text("Keyword").tag(SearchMode.keyword)
                 Text("Semantic").tag(SearchMode.semantic)
@@ -131,7 +150,7 @@ struct ContentView: View {
                 OatEmptyState(
                     icon: "waveform",
                     title: "Nothing selected yet",
-                    message: "Start a new recording, import audio, or pick a past meeting from the sidebar."
+                    message: "Start a new recording, import audio, or pick a past meeting. Press ⌘K to search or run any command."
                 )
                 .background(Theme.bg)
             }
@@ -153,6 +172,13 @@ struct ContentView: View {
                 Text(msg)
             }
         }
+        .alert("Screen Recording is off", isPresented: $coordinator.pendingScreenRecordingDecision) {
+            Button("Open Settings") { coordinator.openScreenRecordingSettings() }
+            Button("Record mic only") { Task { await coordinator.startMicOnlyAfterPrompt(context: context) } }
+            Button("Cancel", role: .cancel) { coordinator.pendingScreenRecordingDecision = false }
+        } message: {
+            Text("Oatmeal captures the other participants through Screen Recording, which is currently off (or needs a quit + relaunch to take effect). Without it, only your microphone is recorded. Open Settings to fix it, or record just your mic.")
+        }
         .onChange(of: coordinator.phase) { oldValue, newValue in
             // Only treat as "just recorded" when the PREVIOUS phase was an active
             // capture (recording/processing) — so a cancelled prepare, or opening an
@@ -165,11 +191,18 @@ struct ContentView: View {
             if newValue == .idle, let last = meetings.first {
                 if wasMidCapture {
                     justRecordedID = last.id
-                    // Genuine successful finalize (processing/recording -> idle with
-                    // a saved meeting): celebrate once. Discards/errors don't land
-                    // here — a discard clears selection via lastDiscardedMeetingID and
-                    // an error transitions to .error, not .idle.
-                    celebrationTick += 1
+                    // Confetti is reserved for meeting-count milestones (every-save
+                    // confetti gets old). Fire once per milestone ever — a stored
+                    // marker stops deleting + re-recording from replaying it, and stops
+                    // existing users getting a retroactive blast on update. (Discards/
+                    // errors don't land here — they go to .error, not .idle.)
+                    let n = meetings.count
+                    if Milestone.counts.contains(n), n > AppSettings.lastCelebratedMilestone,
+                       let message = Milestone.message(for: n) {
+                        AppSettings.lastCelebratedMilestone = n
+                        celebrationTick += 1
+                        milestone = message
+                    }
                 }
                 selection = last
             }
@@ -227,6 +260,12 @@ struct ContentView: View {
         // A one-shot confetti burst (calm checkmark under reduce-motion) that floats
         // above the whole split view when a meeting is successfully saved.
         .celebration(trigger: celebrationTick)
+        .overlay(alignment: .top) {
+            if let milestone {
+                MilestoneToast(title: milestone.title, message: milestone.body) { self.milestone = nil }
+                    .padding(.top, 64)
+            }
+        }
         .sheet(isPresented: $showPalette) {
             CommandPaletteView(
                 meetings: visibleMeetings,

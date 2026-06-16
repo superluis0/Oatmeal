@@ -159,6 +159,9 @@ struct LiveHUDView: View {
 
     private var content: some View {
         VStack(spacing: Theme.Space.xs) {
+            if coordinator.systemAudioMissing && coordinator.isRecording {
+                hudWarningBanner
+            }
             strip
                 // Above the drawer in z, so mid-transition the drawer slides out
                 // from *under* the strip rather than over it.
@@ -192,6 +195,21 @@ struct LiveHUDView: View {
             }
         }
         .fontDesign(Appearance.shared.fontDesign)
+    }
+
+    /// Compact, hard-to-miss warning on the floating panel when system audio isn't
+    /// being captured — the panel is often the only Oatmeal surface visible during a
+    /// fullscreen call.
+    private var hudWarningBanner: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.danger)
+            Text("Mic only — Screen Recording is off")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(Theme.textPrimary)
+        }
+        .padding(.horizontal, Theme.Space.sm)
+        .padding(.vertical, 4)
+        .background(Theme.danger.opacity(0.2), in: Capsule())
     }
 
     // MARK: - The strip

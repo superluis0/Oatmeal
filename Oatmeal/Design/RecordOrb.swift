@@ -8,7 +8,7 @@ import SwiftUI
 ///   large scaling — with only a barely-perceptible level-driven opacity shift.
 /// - When **idle**, it shows a quiet resting dot.
 ///
-/// Self-contained and cheap to draw: the per-frame `TimelineView(.animation)` body
+/// Self-contained and cheap to draw: the throttled (≤30fps) `TimelineView` body
 /// only computes a couple of trig values and applies transforms — no allocations.
 struct RecordOrb: View {
     /// Smoothed input level, 0...1.
@@ -39,7 +39,10 @@ struct RecordOrb: View {
     // MARK: - Active (animated)
 
     private var animatedOrb: some View {
-        TimelineView(.animation) { context in
+        // Cap to 30fps: the breathing/level pulse is imperceptible from 60–120Hz
+        // here, and an uncapped schedule would invalidate the whole sidebar subtree
+        // at the display's full refresh rate for the entire recording.
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             // Ambient breathing in [0,1] (full cycle ~3.2s), independent of audio.
             let breath = (sin(t * (2 * .pi / 3.2)) + 1) / 2

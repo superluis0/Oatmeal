@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import ScreenCaptureKit
 import CoreMedia
+import CoreGraphics
 
 /// Captures system (meeting) audio via ScreenCaptureKit and microphone audio via
 /// AVAudioEngine, resampling both to 16 kHz mono Float32 for Parakeet.
@@ -66,6 +67,16 @@ final class AudioCaptureEngine: NSObject, SCStreamOutput, SCStreamDelegate, @unc
         } catch {
             return false
         }
+    }
+
+    /// Non-prompting check of whether Screen Recording is currently granted to this
+    /// app — unlike `requestScreenRecordingAccess()`, this never shows a system
+    /// dialog, so it's safe to call before a recording to decide whether to warn.
+    /// Note: a grant that's enabled in System Settings but needs a relaunch to take
+    /// effect can still read as granted here — the runtime capture check is the
+    /// reliable backstop for that case.
+    static var hasScreenRecordingPermission: Bool {
+        CGPreflightScreenCaptureAccess()
     }
 
     /// Triggers / verifies the Screen Recording permission and returns a usable display filter.

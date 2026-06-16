@@ -65,10 +65,17 @@ enum Log {
         queue.async { appendToFile(line + "\n") }
     }
 
-    private static func timestamp() -> String {
+    /// One shared formatter: `DateFormatter` is expensive to allocate and its
+    /// formatting methods are thread-safe once configured, so a single static
+    /// instance serves every log line (all emitted on `Log.queue`).
+    private static let timestampFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-        return f.string(from: Date())
+        return f
+    }()
+
+    private static func timestamp() -> String {
+        timestampFormatter.string(from: Date())
     }
 
     private static func openFile() {
@@ -78,7 +85,7 @@ enum Log {
             FileManager.default.createFile(atPath: url.path, contents: nil)
         }
         handle = try? FileHandle(forWritingTo: url)
-        try? handle?.seekToEnd()
+        _ = try? handle?.seekToEnd()  // position at EOF for appending; offset unused
     }
 
     private static func appendToFile(_ text: String) {

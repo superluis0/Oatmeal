@@ -74,10 +74,12 @@ struct RecipesView: View {
     @ViewBuilder
     private var editor: some View {
         if selected == nil {
-            ContentUnavailableView("No Recipe Selected",
-                                   systemImage: "wand.and.stars.inverse",
-                                   description: Text("Create or pick a custom recipe to edit."))
-                .frame(maxWidth: .infinity)
+            OatEmptyState(
+                icon: "wand.and.stars.inverse",
+                title: "No recipe selected",
+                message: "Create or pick a custom recipe to edit its prompt."
+            )
+            .frame(maxWidth: .infinity)
         } else {
             VStack(spacing: 0) {
                 Form {

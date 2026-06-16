@@ -239,3 +239,66 @@ extension View {
         modifier(CelebrationModifier(trigger: trigger, duration: duration))
     }
 }
+
+// MARK: - Milestones
+
+/// A milestone congratulation shown (with confetti) at meeting-count milestones.
+struct MilestoneMessage: Equatable {
+    let title: String
+    let body: String
+}
+
+/// Meeting-count milestones worth celebrating, and their custom messages.
+enum Milestone {
+    static let counts: Set<Int> = [1, 10, 25, 50, 100, 150, 200, 250, 300]
+
+    static func message(for n: Int) -> MilestoneMessage? {
+        switch n {
+        case 1:   return .init(title: "Your first meeting! 🥣", body: "Welcome — Oatmeal's got it from here.")
+        case 10:  return .init(title: "10 meetings in", body: "You're making this a habit.")
+        case 25:  return .init(title: "25 captured", body: "Officially in the groove.")
+        case 50:  return .init(title: "50 meetings!", body: "Half a hundred conversations kept safe.")
+        case 100: return .init(title: "100 meetings 💯", body: "That's a proper archive you've built.")
+        case 150: return .init(title: "150 meetings", body: "You and Oatmeal go way back now.")
+        case 200: return .init(title: "200 captured", body: "Quietly unstoppable.")
+        case 250: return .init(title: "250 meetings", body: "A quarter of a thousand. Wow.")
+        case 300: return .init(title: "300 meetings 🏆", body: "Legendary — thanks for trusting Oatmeal with all of them.")
+        default:  return nil
+        }
+    }
+}
+
+/// A brief, centered milestone card shown alongside the confetti. Fades in, holds,
+/// fades out, then removes itself — calm (no spring) under reduce-motion.
+struct MilestoneToast: View {
+    let title: String
+    let message: String
+    var onDone: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown = false
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(title).font(.system(.title3).weight(.bold)).foregroundStyle(Theme.textPrimary)
+            Text(message).font(.system(.subheadline)).foregroundStyle(Theme.textSecondary)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, Theme.Space.lg)
+        .padding(.vertical, Theme.Space.md)
+        .frame(maxWidth: 360)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+        .shadow(color: .black.opacity(0.15), radius: 18, y: 6)
+        .scaleEffect(shown || reduceMotion ? 1 : 0.9)
+        .opacity(shown ? 1 : 0)
+        .allowsHitTesting(false)
+        .onAppear {
+            if reduceMotion { shown = true }
+            else { withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { shown = true } }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.4) {
+                withAnimation(.easeIn(duration: 0.4)) { shown = false }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.9) { onDone() }
+        }
+    }
+}
