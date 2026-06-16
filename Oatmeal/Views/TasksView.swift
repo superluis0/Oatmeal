@@ -129,7 +129,7 @@ struct TasksView: View {
         guard !text.isEmpty else { return }
         let item = ActionItem(text: text, dueDate: TaskDates.parse(text))
         context.insert(item)
-        try? context.save()
+        SafeStore.saveSoon(context, "add-task")
         quickAdd = ""
     }
 }

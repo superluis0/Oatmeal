@@ -627,7 +627,7 @@ struct MeetingDetailView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: Appearance.shared.scaled(32), weight: .bold))
                 .foregroundStyle(Theme.textPrimary)
-                .onSubmit { try? context.save() }
+                .onSubmit { SafeStore.saveSoon(context, "title") }
             HStack(spacing: 8) {
                 Text(meeting.date, format: .dateTime.month().day().year().hour().minute())
                 if meeting.duration > 0 {
@@ -679,7 +679,7 @@ struct MeetingDetailView: View {
         newTag = ""
         guard !tag.isEmpty, !meeting.tags.contains(tag) else { return }
         meeting.tags.append(tag)
-        try? context.save()
+        SafeStore.saveSoon(context, "add-tag")
     }
 
     /// Cheap signal that changes whenever the summary could go stale, so the
@@ -961,7 +961,7 @@ struct MeetingDetailView: View {
     private var templateBinding: Binding<String> {
         Binding(
             get: { meeting.templateName ?? AppSettings.defaultTemplate },
-            set: { meeting.templateName = $0; try? context.save() }
+            set: { meeting.templateName = $0; SafeStore.saveSoon(context, "template-pick") }
         )
     }
 
@@ -1083,7 +1083,7 @@ struct MeetingDetailView: View {
 
     private var notesSection: some View {
         GroupBox {
-            NotesEditor(text: $meeting.notes, minHeight: 180) { try? context.save() }
+            NotesEditor(text: $meeting.notes, minHeight: 180) { SafeStore.saveSoon(context, "notes") }
         } label: {
             Label("My Notes", systemImage: "square.and.pencil")
         }
@@ -1243,9 +1243,22 @@ struct MeetingDetailView: View {
     /// (whole-word text patch, no LLM — see `Meeting.setSpeakerName`), then persist
     /// and reindex. Shared by the rename editor and the wrap-up confirm step.
     private func renameSpeaker(_ label: String, to newName: String) {
-        meeting.setSpeakerName(newName, for: label)
-        SafeStore.save(context, "rename-speaker")
-        SemanticIndex(context: context).reindex(meeting)
+        // Defer the mutation + save to the next main-actor turn. This is invoked
+        // from SpeakerRenameRow's focus-loss `.onChange(of: focused)` / `.onSubmit`
+        // and from the attendee-assign menu — all of which fire *inside* SwiftUI's
+        // update + layout pass. Calling `context.save()` synchronously there
+        // re-enters SwiftData mid-update, and CoreData aborts the process with an
+        // Objective-C exception that terminates *while unwinding through SwiftData's
+        // own Swift frames* — so nothing (SafeStore's ObjC catch included) can
+        // intercept it. Hopping past the current update lets the save commit
+        // cleanly. (Diagnosed from a real SIGABRT backtrace: renameSpeaker →
+        // SafeStore.save → context.save → performBlockAndWait → objc_terminate.)
+        Task { @MainActor in
+            guard meeting.isAlive else { return }
+            meeting.setSpeakerName(newName, for: label)
+            SafeStore.save(context, "rename-speaker")
+            SemanticIndex(context: context).reindex(meeting)
+        }
     }
 
     private func reidentify() async {
@@ -1259,13 +1272,20 @@ struct MeetingDetailView: View {
     /// Reassigns every segment of `from` to `target` and reindexes — making the
     /// merge structural (the transcript, summaries, and chat all see one speaker).
     private func mergeSpeaker(_ from: String, into target: String) {
-        let fromName = meeting.displayName(for: from)
-        let toName = meeting.displayName(for: target)
-        for seg in meeting.orderedSegments where seg.speaker == from { seg.speaker = target }
-        meeting.speakerNames[from] = nil
-        meeting.relabelOwners(from: fromName, to: toName)
-        try? context.save()
-        SemanticIndex(context: context).reindex(meeting)
+        // Deferred + routed through SafeStore for the same reason as renameSpeaker
+        // above: never run `context.save()` synchronously inside the SwiftUI update
+        // pass (the merge menu's action fires from within it). The old
+        // `try? context.save()` here couldn't catch an ObjC save exception anyway.
+        Task { @MainActor in
+            guard meeting.isAlive else { return }
+            let fromName = meeting.displayName(for: from)
+            let toName = meeting.displayName(for: target)
+            for seg in meeting.orderedSegments where seg.speaker == from { seg.speaker = target }
+            meeting.speakerNames[from] = nil
+            meeting.relabelOwners(from: fromName, to: toName)
+            SafeStore.save(context, "merge-speaker")
+            SemanticIndex(context: context).reindex(meeting)
+        }
     }
 
     private func editableRow(_ seg: TranscriptSegment) -> some View {
@@ -1273,7 +1293,7 @@ struct MeetingDetailView: View {
             Text(meeting.displayName(for: seg.speaker)).font(.caption.bold())
             TextField("Text", text: Binding(
                 get: { seg.text },
-                set: { seg.text = $0; try? context.save() }
+                set: { seg.text = $0; SafeStore.saveSoon(context, "transcript-edit") }
             ), axis: .vertical)
                 .textFieldStyle(.roundedBorder)
         }

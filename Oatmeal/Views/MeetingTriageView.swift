@@ -157,22 +157,33 @@ struct MeetingTriageView: View {
     }
 
     /// Cheap rename + summary sync (see `Meeting.setSpeakerName`), then persist.
+    /// Deferred to the next main-actor turn: this fires from SpeakerRenameRow's
+    /// focus-loss `.onChange` / `.onSubmit` inside SwiftUI's update + layout pass,
+    /// and a synchronous `context.save()` there re-enters SwiftData and aborts the
+    /// process with an uncatchable ObjC exception (see MeetingDetailView.renameSpeaker).
     private func renameSpeaker(_ label: String, to newName: String) {
-        meeting.setSpeakerName(newName, for: label)
-        SafeStore.save(context, "confirm-speaker")
-        SemanticIndex(context: context).reindex(meeting)
+        Task { @MainActor in
+            guard meeting.isAlive else { return }
+            meeting.setSpeakerName(newName, for: label)
+            SafeStore.save(context, "confirm-speaker")
+            SemanticIndex(context: context).reindex(meeting)
+        }
     }
 
     /// Structural merge (fixes over-splitting) — leaves the summary stale so the
-    /// detail view's "Update summary" surfaces.
+    /// detail view's "Update summary" surfaces. Deferred for the same reason as
+    /// `renameSpeaker`.
     private func mergeSpeaker(_ from: String, into target: String) {
-        let fromName = meeting.displayName(for: from)
-        let toName = meeting.displayName(for: target)
-        for seg in meeting.orderedSegments where seg.speaker == from { seg.speaker = target }
-        meeting.speakerNames[from] = nil
-        meeting.relabelOwners(from: fromName, to: toName)
-        SafeStore.save(context, "confirm-merge")
-        SemanticIndex(context: context).reindex(meeting)
+        Task { @MainActor in
+            guard meeting.isAlive else { return }
+            let fromName = meeting.displayName(for: from)
+            let toName = meeting.displayName(for: target)
+            for seg in meeting.orderedSegments where seg.speaker == from { seg.speaker = target }
+            meeting.speakerNames[from] = nil
+            meeting.relabelOwners(from: fromName, to: toName)
+            SafeStore.save(context, "confirm-merge")
+            SemanticIndex(context: context).reindex(meeting)
+        }
     }
 
     // MARK: Step 1 — Review
@@ -333,7 +344,7 @@ struct MeetingTriageView: View {
         let item = ActionItem(text: text, dueDate: TaskDates.parse(text))
         context.insert(item)
         item.meeting = meeting
-        try? context.save()
+        SafeStore.saveSoon(context, "triage-add-task")
         quickAdd = ""
     }
 }

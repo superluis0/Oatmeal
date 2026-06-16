@@ -127,7 +127,7 @@ struct TemplateEditorView: View {
         t.name = name
         t.systemPrompt = systemPrompt
         t.skeleton = skeleton
-        try? context.save()
+        SafeStore.saveSoon(context, "template-edit")
     }
 
     private func deleteTemplates(at offsets: IndexSet) {

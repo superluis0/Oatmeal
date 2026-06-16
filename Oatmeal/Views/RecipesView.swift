@@ -118,7 +118,7 @@ struct RecipesView: View {
         guard let r = selected else { return }
         r.name = name
         r.prompt = prompt
-        try? context.save()
+        SafeStore.saveSoon(context, "recipe-edit")
     }
 
     private func delete(at offsets: IndexSet) {

@@ -1,11 +1,20 @@
 import Foundation
 import SwiftData
 
-/// Crash-proof SwiftData saves. SwiftData/CoreData can raise Objective-C
+/// Best-effort SwiftData saves. SwiftData/CoreData can raise Objective-C
 /// exceptions (e.g. saving a relationship to a row that was deleted) which Swift
-/// cannot catch with `try?` — they abort the app. This routes saves through an
-/// ObjC exception bridge and, on failure, rolls back the offending change and
-/// logs it instead of crashing.
+/// can't catch with `try?`. This routes the save through an ObjC `@try/@catch`
+/// and, on failure, rolls back the offending change and logs it.
+///
+/// IMPORTANT LIMITATION: the ObjC catch only helps when the exception is raised
+/// *before* the work crosses into CoreData's `performBlockAndWait`. An exception
+/// thrown *inside* the save (the common case) is rethrown by `performBlockAndWait`
+/// and unwinds back through SwiftData's own Swift frames before it can reach this
+/// `@catch` — and an ObjC exception unwinding through Swift frames calls
+/// `std::terminate`, aborting the app regardless. So this is NOT a guarantee.
+/// The real protection is to avoid making `save()` throw: never call it
+/// re-entrantly from inside a SwiftUI update/layout pass (defer such saves to the
+/// next main-actor turn — see `MeetingDetailView.renameSpeaker`).
 @MainActor
 enum SafeStore {
 
@@ -28,5 +37,27 @@ enum SafeStore {
             return false
         }
         return true
+    }
+
+    private static var pendingSave: Task<Void, Never>?
+
+    /// Schedule a save on a LATER main-actor turn instead of right now. Use this
+    /// for any save triggered by a SwiftUI view update — a binding `set:` closure,
+    /// `.onChange`, `.onSubmit`, or an editor callback — where calling `save()`
+    /// synchronously re-enters SwiftData mid-update and can abort the app (see the
+    /// type doc above). The work hops past the current update/layout, so the save
+    /// commits cleanly.
+    ///
+    /// Successive calls coalesce: a short debounce collapses a burst of edits (e.g.
+    /// per-keystroke transcript or notes editing) into a single save shortly after
+    /// the last change. Autosave still covers anything in flight, so a coalesced
+    /// call that never fires (rapid quit) loses nothing.
+    static func saveSoon(_ context: ModelContext, _ context_label: String = "") {
+        pendingSave?.cancel()
+        pendingSave = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            save(context, context_label)
+        }
     }
 }
