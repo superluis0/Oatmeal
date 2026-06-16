@@ -46,5 +46,10 @@
 	<string>z8Wip8HXiwv1Jg1OyCAORHDvtUUZDju7Sl0KOfEwk6Q=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<!-- Background check cadence for a long-running instance (seconds). 7200 = 2h,
+	     so testers leaving Oatmeal open pick up a release within a couple hours;
+	     a relaunch surfaces it immediately. Sparkle's default is 86400 (24h). -->
+	<key>SUScheduledCheckInterval</key>
+	<integer>7200</integer>
 </dict>
 </plist>

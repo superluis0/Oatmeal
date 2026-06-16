@@ -32,6 +32,12 @@ struct ContentView: View {
     @State private var celebrationTick = 0
     /// The milestone card to show (with confetti) at meeting-count milestones.
     @State private var milestone: MilestoneMessage?
+    /// Mirrors Sparkle's update state so the floating update banner appears the
+    /// moment a new version is found.
+    @State private var updateChecker = UpdateChecker.shared
+    /// Per-session dismissal of the update banner ("Later"). Resets next launch, so
+    /// a pending update gently re-surfaces; the sidebar pill is the always-on reminder.
+    @State private var updateBannerDismissed = false
 
     private func resetDestinations() {
         showGlobalChat = false; showPeople = false; showTasks = false
@@ -266,6 +272,21 @@ struct ContentView: View {
                     .padding(.top, 64)
             }
         }
+        // A prominent, friendly notice that floats above the whole window when a
+        // new version is ready — the in-app counterpart to Sparkle's (now
+        // suppressed) modal. "Update Now" hands off to Sparkle's install flow.
+        .overlay(alignment: .top) {
+            if let release = updateChecker.available, !updateBannerDismissed {
+                UpdateBanner(
+                    version: release.version,
+                    onUpdate: { UpdateChecker.shared.checkForUpdates() },
+                    onLater: { updateBannerDismissed = true }
+                )
+                .padding(.horizontal, Theme.Space.lg)
+                .padding(.top, Theme.Space.sm)
+                .zIndex(20)
+            }
+        }
         .sheet(isPresented: $showPalette) {
             CommandPaletteView(
                 meetings: visibleMeetings,
@@ -397,5 +418,58 @@ struct ContentView: View {
         .padding(Theme.Space.sm)
         .background(.regularMaterial)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
+    }
+}
+
+/// The floating "Update available" banner shown at the top of the main window when
+/// Sparkle finds a newer release. Cozy and accent-tinted, gently animated in
+/// (respecting Reduce Motion). "Update Now" hands off to Sparkle's signed,
+/// one-click install flow via `checkForUpdates()`.
+private struct UpdateBanner: View {
+    let version: String
+    var onUpdate: () -> Void
+    var onLater: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown = false
+
+    var body: some View {
+        HStack(spacing: Theme.Space.sm) {
+            ZStack {
+                Circle().fill(Theme.accentSoft).frame(width: 40, height: 40)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Update available")
+                    .font(.system(.subheadline).weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("Oatmeal \(version) is ready — installs in a tap.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+            }
+            Spacer(minLength: Theme.Space.md)
+            Button("Later", action: onLater)
+                .buttonStyle(OatGhostButton())
+            Button(action: onUpdate) {
+                Label("Update Now", systemImage: "arrow.down.circle.fill")
+            }
+            .buttonStyle(OatPrimaryButton())
+        }
+        .padding(.vertical, Theme.Space.sm)
+        .padding(.horizontal, Theme.Space.md)
+        .frame(maxWidth: 540)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .strokeBorder(Theme.accent.opacity(0.45), lineWidth: 1)
+        )
+        .shadow(color: Theme.accent.opacity(0.22), radius: 20, y: 8)
+        .offset(y: (shown || reduceMotion) ? 0 : -90)
+        .opacity((shown || reduceMotion) ? 1 : 0)
+        .onAppear {
+            guard !reduceMotion else { shown = true; return }
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.82)) { shown = true }
+        }
     }
 }

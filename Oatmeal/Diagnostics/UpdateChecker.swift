@@ -42,8 +42,13 @@ final class UpdateChecker {
         guard controller == nil else { return }
         let bridge = SparkleBridge(owner: self)
         self.bridge = bridge   // retain — SPUStandardUpdaterController holds the delegate weakly
+        // `userDriverDelegate: bridge` enables Sparkle's "gentle reminders": instead
+        // of auto-popping its modal on a background check, Sparkle lets us surface
+        // the update ourselves (the in-app banner + sidebar pill, driven by
+        // `available`). The user still installs through Sparkle's standard dialog,
+        // reached via `checkForUpdates()` from the banner.
         controller = SPUStandardUpdaterController(
-            startingUpdater: true, updaterDelegate: bridge, userDriverDelegate: nil)
+            startingUpdater: true, updaterDelegate: bridge, userDriverDelegate: bridge)
         controller?.updater.automaticallyChecksForUpdates = AppSettings.checkForUpdates
     }
 
@@ -84,10 +89,11 @@ final class UpdateChecker {
 /// Bridges Sparkle's `@objc SPUUpdaterDelegate` to the `@Observable @MainActor`
 /// `UpdateChecker`. Sparkle invokes delegate methods on the main thread, so
 /// `MainActor.assumeIsolated` is safe here.
-private final class SparkleBridge: NSObject, SPUUpdaterDelegate {
+private final class SparkleBridge: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
     private weak var owner: UpdateChecker?
     init(owner: UpdateChecker) { self.owner = owner }
 
+    // MARK: SPUUpdaterDelegate
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         MainActor.assumeIsolated { owner?.didFind(item) }
     }
@@ -98,5 +104,20 @@ private final class SparkleBridge: NSObject, SPUUpdaterDelegate {
                  didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
                  error: (any Error)?) {
         MainActor.assumeIsolated { owner?.cycleFinished() }
+    }
+
+    // MARK: SPUStandardUserDriverDelegate — gentle reminders
+    // We show updates with our own in-app banner (see ContentView's UpdateBanner),
+    // so tell Sparkle not to auto-present its modal alert on scheduled/background
+    // checks. `available` is set in `didFindValidUpdate` above, which is what the
+    // banner + pill bind to; the user installs via "Update Now" → `checkForUpdates()`
+    // (user-initiated, which always shows Sparkle's standard install dialog — this
+    // method is never consulted for user-initiated checks, so updates can't be
+    // blocked).
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem,
+                                                              andInImmediateFocus immediateFocus: Bool) -> Bool {
+        false
     }
 }
