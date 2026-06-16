@@ -53,6 +53,22 @@ enum Log {
         emit("ERROR", category, message + suffix)
     }
 
+    /// A short, paste-able diagnostics blob — app version, macOS, and the last ~60
+    /// log lines (breadcrumbs only; never transcripts or audio) — for sending to
+    /// support when something goes wrong.
+    static func diagnosticsSummary() -> String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        var out = "Oatmeal \(v) (\(b)) · \(os)\n"
+        if let url = logURL, let data = try? Data(contentsOf: url),
+           let text = String(data: data, encoding: .utf8) {
+            let recent = text.split(separator: "\n", omittingEmptySubsequences: false).suffix(60)
+            out += "\nRecent log:\n" + recent.joined(separator: "\n")
+        }
+        return out
+    }
+
     // MARK: - Internals
 
     private static func emit(_ level: String, _ category: String, _ message: String) {

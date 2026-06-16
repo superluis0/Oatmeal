@@ -60,6 +60,12 @@ struct OatmealApp: App {
             // one-click install flow (see UpdateChecker).
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { UpdateChecker.shared.checkForUpdates() }
+                Button("Reveal Logs in Finder") {
+                    if let dir = Log.logDirectory {
+                        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                        NSWorkspace.shared.activateFileViewerSelecting([dir])
+                    }
+                }
             }
         }
 

@@ -257,6 +257,10 @@ struct SettingsView: View {
                         NSWorkspace.shared.activateFileViewerSelecting([dir])
                     }
                 }
+                Button("Copy diagnostics for support") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(Log.diagnosticsSummary(), forType: .string)
+                }
                 Button("Back up meetings now") {
                     StoreBackup.snapshot(context: modelContext)
                     backupConfirmed = true

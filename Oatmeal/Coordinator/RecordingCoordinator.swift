@@ -235,6 +235,16 @@ final class RecordingCoordinator {
         }
         meeting.duration = duration
 
+        // Save the raw audio FIRST — it's the durable source of truth. The transcript
+        // and summary can always be rebuilt from it (see reprocessFromAudio), so even
+        // if transcription/processing fails or the app is killed, the recording itself
+        // is never lost. (saveAudio returns nil when there were no samples at all.)
+        let hasAudio = !system.isEmpty || !mic.isEmpty
+        if hasAudio {
+            meeting.audioPath = saveAudio(system: system, mic: mic, meetingID: meeting.id)
+            SafeStore.save(context, "audio-saved")
+        }
+
         phase = .processing("Transcribing and identifying speakers…")
         let segments: [LiveSegment]
         do {
@@ -243,24 +253,28 @@ final class RecordingCoordinator {
                 expectedSpeakers: expectedSpeakerHint(for: meeting)
             )
         } catch {
-            // Clear active state so the next recording starts clean (otherwise a
-            // stale startDate inflates the next session's elapsed time).
             Log.error("transcription failed", "recording", error)
-            // A capture-permission failure is fixable and worth surfacing — don't
-            // silently discard. Keep the meeting with a clear explanation so it's
-            // visible and actionable instead of vanishing without a trace.
-            if systemAudioMissing {
+            // Clear active state so the next recording starts clean (a stale
+            // startDate would inflate the next session's elapsed time).
+            activeMeeting = nil
+            startDate = nil
+            // If any audio was captured it's already saved — KEEP the recording so
+            // the user can re-run transcription from it ("Transcribe recording" in
+            // the detail view). Never discard a recording that has audio.
+            if hasAudio {
                 if meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    meeting.notes = "⚠️ No audio was captured for this meeting. Screen Recording was off, so the other participants weren't recorded (and the mic alone caught nothing usable). To fix it: System Settings → Privacy & Security → Screen & System Audio Recording → turn on Oatmeal, then fully quit Oatmeal (menu-bar icon → Quit) and reopen it."
+                    meeting.notes = systemAudioMissing
+                        ? "⚠️ Screen Recording was off, so the other participants weren't captured. The audio that was recorded is saved — if it has usable speech you can re-transcribe it below. To capture the other side next time: System Settings → Privacy & Security → Screen & System Audio Recording → turn on Oatmeal, then fully quit Oatmeal (menu-bar icon → Quit) and reopen it."
+                        : "⚠️ This recording couldn't be transcribed (\(error.localizedDescription)). The audio is saved — use \"Transcribe recording\" to try again."
                 }
-                SafeStore.save(context, "capture-failed-kept")
-                activeMeeting = nil
-                startDate = nil
-                phase = .error("No audio was captured — Screen Recording looks off. Your meeting was kept with steps to fix it.")
+                SafeStore.save(context, "transcription-failed-kept")
+                phase = .error(systemAudioMissing
+                    ? "No system audio (Screen Recording looks off) — your recording was kept; you can re-transcribe it from the meeting."
+                    : "Couldn't transcribe the recording — it was kept. Open it and tap \"Transcribe recording\" to try again.")
                 return
             }
-            // Discard the empty meeting (nothing was transcribed) unless the user
-            // typed notes — leaving it behind creates a broken half-meeting.
+            // No audio at all (e.g. a 0-second tap) — nothing to recover; drop the
+            // empty shell unless the user typed notes.
             if meeting.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && meeting.segments.isEmpty {
                 // Signal the UI to drop this from `selection` BEFORE we invalidate it.
@@ -268,9 +282,7 @@ final class RecordingCoordinator {
                 context.delete(meeting)
                 SafeStore.save(context, "discard-empty-meeting")
             }
-            activeMeeting = nil
-            startDate = nil
-            phase = .error("Transcription failed: \(error.localizedDescription)")
+            phase = .error("No audio was captured for this recording.")
             return
         }
 
@@ -284,12 +296,9 @@ final class RecordingCoordinator {
         liveSegments = segments
         autoNameSpeakers(meeting, segments: segments)
 
-        // Archive audio (mixed) best-effort
-        meeting.audioPath = saveAudio(system: system, mic: mic, meetingID: meeting.id)
-
-        // Commit the transcript NOW, before the multi-second LLM step — so a crash or
-        // force-quit mid-processing can't lose it. Only the summary would then need a
-        // redo, which the detail view's "Generate summary" banner already offers.
+        // Audio was already archived up front. Commit the transcript NOW, before the
+        // multi-second LLM step, so a crash/force-quit can't lose it — only the
+        // summary would then need a redo (the detail view's banner offers that).
         SafeStore.save(context, "transcript-saved")
 
         guard await summarizeAndEnhance(meeting: meeting, context: context) else { return }
@@ -790,6 +799,65 @@ final class RecordingCoordinator {
         SafeStore.save(context, "reidentify-speakers")
         SemanticIndex(context: context).reindex(meeting)
         phase = .idle
+    }
+
+    /// Rescue path: rebuild the transcript AND summary from a meeting's archived
+    /// audio. The audio is the durable source of truth, so when the original run
+    /// failed (LM Studio down, an interrupted/killed process, a transient model
+    /// error, or no system audio) this re-runs the whole pipeline on the recording.
+    func reprocessFromAudio(meeting: Meeting, context: ModelContext) async {
+        guard phase == .idle, meeting.modelContext != nil else { return }
+        guard let path = meeting.audioPath,
+              FileManager.default.fileExists(atPath: path) else {
+            phase = .error("This recording has no archived audio to re-process.")
+            return
+        }
+
+        phase = .processing("Loading speech models…")
+        do {
+            try await transcription.prepare()
+            AppSettings.modelsPreparedBefore = true
+        } catch {
+            phase = .error("Failed to load speech models: \(error.localizedDescription)")
+            return
+        }
+
+        let streams: (system: [Float], mic: [Float])
+        do {
+            streams = try AudioImporter.loadStereo16k(from: URL(fileURLWithPath: path))
+        } catch {
+            phase = .error("Couldn't read the archived audio: \(error.localizedDescription)")
+            return
+        }
+
+        phase = .processing("Transcribing the recording…")
+        let segments: [LiveSegment]
+        do {
+            segments = try await transcription.buildTranscript(
+                systemSamples: streams.system, micSamples: streams.mic,
+                expectedSpeakers: expectedSpeakerHint(for: meeting))
+        } catch {
+            phase = .error("Couldn't transcribe this recording — it may not contain usable speech.")
+            return
+        }
+
+        // Replace any existing (usually empty) transcript with the rebuilt one.
+        for seg in meeting.segments { context.delete(seg) }
+        meeting.segments.removeAll()
+        for seg in segments {
+            let model = TranscriptSegment(start: seg.start, end: seg.end, speaker: seg.speaker, text: seg.text)
+            model.meeting = meeting
+            meeting.segments.append(model)
+            context.insert(model)
+        }
+        let newLabels = Set(segments.map { $0.speaker })
+        meeting.speakerNames = meeting.speakerNames.filter { newLabels.contains($0.key) }
+        autoNameSpeakers(meeting, segments: segments)
+        SafeStore.save(context, "reprocess-transcript")
+
+        // …then (re)build the summary + notes from the rebuilt transcript.
+        let ok = await summarizeAndEnhance(meeting: meeting, context: context)
+        if ok { phase = .idle }   // on failure, summarizeAndEnhance leaves phase = .error
     }
 
     /// Re-runs the summary on a finished meeting using the current identity

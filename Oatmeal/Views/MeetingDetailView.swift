@@ -297,6 +297,7 @@ struct MeetingDetailView: View {
     @State private var recipeIsEmail = false
     @State private var player = AudioPlayer()
     @State private var showDeleteConfirm = false
+    @State private var showReprocessConfirm = false
     @State private var jumpTarget: PersistentIdentifier?
     @State private var showFollowUpSheet = false
     @State private var followUpDate = Date().addingTimeInterval(7 * 86_400)
@@ -376,8 +377,11 @@ struct MeetingDetailView: View {
             VStack(alignment: .leading, spacing: Theme.Space.lg) {
                 titleSection
                 summarySection
-                if meeting.liveSummary == nil, !meeting.segments.isEmpty,
+                if meeting.segments.isEmpty, meeting.audioPath != nil,
                    let coordinator, !coordinator.isBusy {
+                    untranscribedBanner(coordinator)
+                } else if meeting.liveSummary == nil, !meeting.segments.isEmpty,
+                          let coordinator, !coordinator.isBusy {
                     missingSummaryBanner(coordinator)
                 }
                 recurringSection
@@ -441,6 +445,12 @@ struct MeetingDetailView: View {
                             Task { await coordinator?.regenerateSummary(for: meeting, context: context) }
                         } label: { Label("Regenerate summary", systemImage: "sparkles") }
                     }
+                    if coordinator != nil, meeting.audioPath != nil {
+                        Divider()
+                        Button {
+                            showReprocessConfirm = true
+                        } label: { Label("Re-transcribe from recording", systemImage: "waveform") }
+                    }
                 } label: {
                     Label("Follow up", systemImage: "arrowshape.turn.up.right")
                 }
@@ -488,6 +498,14 @@ struct MeetingDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This permanently removes the transcript, notes, summary, chat, and audio. This can't be undone.")
+        }
+        .confirmationDialog("Re-transcribe from the recording?", isPresented: $showReprocessConfirm, titleVisibility: .visible) {
+            Button("Re-transcribe", role: .destructive) {
+                Task { await coordinator?.reprocessFromAudio(meeting: meeting, context: context) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This rebuilds the transcript and summary from the saved audio, replacing what's there now.")
         }
         .overlay {
             if runningRecipe {
@@ -751,6 +769,35 @@ struct MeetingDetailView: View {
         .padding(8)
         .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
         .foregroundStyle(Theme.accent)
+    }
+
+    /// Shown when a recording was saved but never transcribed (transcription failed
+    /// at record time — LM Studio offline, an interrupted run, or no system audio).
+    /// The audio is the source of truth, so this re-runs the whole pipeline from it.
+    private func untranscribedBanner(_ coordinator: RecordingCoordinator) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Recording saved — not transcribed yet")
+                    .font(.subheadline.weight(.semibold))
+                Text("Transcription didn't finish (LM Studio offline, an interrupted run, or no system audio). The audio is safe — run it again to get the transcript and summary.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    Task { await coordinator.reprocessFromAudio(meeting: meeting, context: context) }
+                } label: {
+                    Label("Transcribe recording", systemImage: "waveform")
+                }
+                .buttonStyle(OatPrimaryButton())
+                .disabled(coordinator.isBusy)
+                .padding(.top, 2)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(Theme.Space.md)
+        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
     }
 
     /// Shown when a finished recording has a transcript but no summary — e.g. LM
