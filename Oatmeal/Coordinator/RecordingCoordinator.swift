@@ -313,7 +313,14 @@ final class RecordingCoordinator {
         // confuse the note-taker ("Me") with the other participants or invent
         // affiliations.
         let identity = MeetingIdentity.preamble(knownSpeakers: meeting.speakerNames)
-        let transcript = MeetingIdentity.ground(transcript: meeting.transcriptText, userName: AppSettings.userName)
+        // Read the transcript off the live segments ONCE, here on the main actor
+        // before any await — everything downstream works off these captured strings.
+        // The long LLM call gives the store plenty of time to change or fault, and
+        // re-reading segments afterward (the sort inside `orderedSegments`) can trap
+        // SwiftData if a row can't be fulfilled — the post-recording crash seen in
+        // the field.
+        let rawTranscript = meeting.transcriptText
+        let transcript = MeetingIdentity.ground(transcript: rawTranscript, userName: AppSettings.userName)
 
         // Capture the model-derived inputs on the main actor up front, then run the
         // two independent LLM calls — the summary (required) and note enhancement
@@ -324,6 +331,7 @@ final class RecordingCoordinator {
         let title = meeting.title
         let attendees = meeting.attendeeNames
         let rawNotes = meeting.notes
+        let segmentCount = meeting.segments.count
         let template = await resolveTemplate(for: meeting, transcript: transcript, context: context)
 
         phase = .processing("Generating summary & notes…")
@@ -347,8 +355,9 @@ final class RecordingCoordinator {
         context.insert(summary)
         meeting.summary = summary
         // Stamp the transcript the summary was built from, so later speaker
-        // fixes / edits can detect when it's gone stale.
-        summary.transcriptSignature = meeting.currentSummarySignatureHash
+        // fixes / edits can detect when it's gone stale. Hash the transcript we
+        // already captured up front — never re-read live segments here.
+        summary.transcriptSignature = Meeting.signatureHash(forBasis: transcript)
 
         // Non-fatal: keep transcript + summary even if enhancement fails.
         meeting.templateName = template.name
@@ -359,25 +368,28 @@ final class RecordingCoordinator {
 
         // Structured action items (task + owner + due).
         phase = .processing("Extracting action items…")
-        await extractActionItems(for: meeting, context: context)
+        await extractActionItems(for: meeting, context: context, transcript: rawTranscript)
 
         SafeStore.save(context, "process-meeting")
         SemanticIndex(context: context).reindex(meeting)
         MCPExport.sync(context: context)
         StoreBackup.snapshot(context: context)
         await WebhookService().postIfConfigured(
-            title: meeting.title,
-            summary: meeting.summary?.text ?? "",
-            actionItems: meeting.summary?.actionItems ?? []
+            title: title,
+            summary: result.text,
+            actionItems: result.actionItems
         )
-        Log.info("meeting processed & saved: \(meeting.title) (\(meeting.segments.count) segments)", "summary")
+        Log.info("meeting processed & saved: \(title) (\(segmentCount) segments)", "summary")
         return true
     }
 
     /// Extracts structured action items (dedup on text) and attaches them to the meeting.
-    func extractActionItems(for meeting: Meeting, context: ModelContext) async {
+    func extractActionItems(for meeting: Meeting, context: ModelContext, transcript: String? = nil) async {
+        // Prefer a transcript captured up front (post-recording flow) over re-reading
+        // live segments after this await — see summarizeAndEnhance.
+        let transcriptText = transcript ?? meeting.transcriptText
         let notes = meeting.enhancedNotes.isEmpty ? meeting.notes : meeting.enhancedNotes
-        let extracted = await ActionItemExtractor().extract(transcript: meeting.transcriptText, notes: notes)
+        let extracted = await ActionItemExtractor().extract(transcript: transcriptText, notes: notes)
         let existing = Set(meeting.actionItems.map { $0.text.lowercased() })
         for action in extracted where !existing.contains(action.text.lowercased()) {
             let item = ActionItem(text: action.text, dueDate: action.dueDate, owner: action.owner)
@@ -888,7 +900,7 @@ final class RecordingCoordinator {
             let summary = Summary(text: result.text, actionItems: result.actionItems, keyPoints: result.keyPoints)
             context.insert(summary)
             meeting.summary = summary
-            summary.transcriptSignature = meeting.currentSummarySignatureHash
+            summary.transcriptSignature = Meeting.signatureHash(forBasis: transcript)
             if let old { context.delete(old) }
             SafeStore.save(context, "resummarize")
             SemanticIndex(context: context).reindex(meeting)

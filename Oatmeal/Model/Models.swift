@@ -172,7 +172,17 @@ final class Meeting {
     /// launches — deliberately NOT Swift's per-process-seeded `Hasher`, which would
     /// mark every summary stale on each relaunch.
     var currentSummarySignatureHash: String {
-        SHA256.hash(data: Data(summarySignatureBasis.utf8))
+        Meeting.signatureHash(forBasis: summarySignatureBasis)
+    }
+
+    /// SHA-256 hex of an already-grounded transcript basis. Lets the post-recording
+    /// and regenerate flows stamp the signature from the grounded transcript STRING
+    /// they already hold, instead of re-reading live `TranscriptSegment`s in a late
+    /// async continuation — that re-read sorts the segments and can trap
+    /// (SwiftData fault-fulfillment) if the store or objects have gone bad by then,
+    /// which is exactly the post-recording crash seen in the wild.
+    static func signatureHash(forBasis basis: String) -> String {
+        SHA256.hash(data: Data(basis.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
     }
