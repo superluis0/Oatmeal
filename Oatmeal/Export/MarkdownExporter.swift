@@ -57,9 +57,15 @@ enum MarkdownExporter {
         }
         let tasks = meeting.liveActionItems
         if !tasks.isEmpty {
-            out += "## Action Items\n\n" + tasks.map { item in
-                "- " + (item.isDone ? "~~\(item.text)~~" : item.text) + (item.owner.map { " — \($0)" } ?? "")
-            }.joined(separator: "\n") + "\n\n"
+            // Build line-by-line with simple statements — the one-expression `map`
+            // version pinned Swift's type-checker (fine locally, timed out in CI).
+            out += "## Action Items\n\n"
+            for item in tasks {
+                let body = item.isDone ? "~~\(item.text)~~" : item.text
+                let owner = item.owner.map { " — \($0)" } ?? ""
+                out += "- \(body)\(owner)\n"
+            }
+            out += "\n"
         } else if let s = meeting.summary, !s.actionItems.isEmpty {
             out += "## Action Items\n\n" + s.actionItems.map { "- \($0)" }.joined(separator: "\n") + "\n\n"
         }
