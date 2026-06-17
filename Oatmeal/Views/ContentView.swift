@@ -38,6 +38,9 @@ struct ContentView: View {
     /// Per-session dismissal of the update banner ("Later"). Resets next launch, so
     /// a pending update gently re-surfaces; the sidebar pill is the always-on reminder.
     @State private var updateBannerDismissed = false
+    /// Surfaces a restart prompt when the persistent store fails at the SQLite level
+    /// mid-session — better than limping on toward a fault-fulfillment trap.
+    @State private var storeHealth = StoreHealth.shared
 
     private func resetDestinations() {
         showGlobalChat = false; showPeople = false; showTasks = false
@@ -260,6 +263,14 @@ struct ContentView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text("A crash report was saved to your local logs. Your meetings are safe — they're backed up automatically.")
+        }
+        .alert("Oatmeal needs a restart", isPresented: Binding(
+            get: { storeHealth.degraded }, set: { if !$0 { storeHealth.degraded = false } }
+        )) {
+            Button("Quit Oatmeal") { NSApp.terminate(nil) }
+            Button("Later", role: .cancel) { storeHealth.degraded = false }
+        } message: {
+            Text("Oatmeal had trouble saving to its database. Quit and reopen to recover your meetings from the latest backup — your data is safe.")
         }
         .background(shortcutButtons)
         .overlay(alignment: .bottom) { if pendingDelete != nil { undoToast } }

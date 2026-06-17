@@ -34,6 +34,17 @@ enum SafeStore {
         }
         if let swiftError {
             Log.error("save failed (\(context_label))", "store", swiftError)
+            // A store-LEVEL failure (the SQLite file can't be opened/written) means
+            // the database is no longer trustworthy — continuing to read model
+            // objects can hit a fault-fulfillment trap. Flag it so the UI prompts a
+            // restart, which recovers from the latest backup on relaunch. This is
+            // distinct from an ordinary per-object validation error.
+            let ns = swiftError as NSError
+            if ns.code == 256 || ns.userInfo["NSSQLiteErrorDomain"] != nil
+                || (134_000...134_999).contains(ns.code) {
+                Log.error("store appears unreadable (\(context_label)) — prompting restart", "store")
+                StoreHealth.shared.degraded = true
+            }
             return false
         }
         return true
@@ -60,4 +71,17 @@ enum SafeStore {
             save(context, context_label)
         }
     }
+}
+
+/// Observable health flag for the persistent store. Set when a save fails at the
+/// SQLite/store level (not a normal per-object error) — at that point the store
+/// can't be trusted and reading model objects may trap, so the UI surfaces a
+/// "restart to recover" prompt (see `ContentView`). Recovery itself is automatic
+/// on the next launch via `StoreBackup`.
+@MainActor
+@Observable
+final class StoreHealth {
+    static let shared = StoreHealth()
+    var degraded = false
+    private init() {}
 }
