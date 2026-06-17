@@ -32,6 +32,11 @@ enum MCPExport {
             dict["summary"] = m.summary?.text ?? ""
             dict["keyPoints"] = m.summary?.keyPoints ?? []
             dict["actionItems"] = m.summary?.actionItems ?? []
+            // Structured tasks (text + owner + done) for the agent tools — distinct
+            // from the summary's plain action-item strings above.
+            dict["tasks"] = m.liveActionItems.map {
+                ["text": $0.text, "owner": $0.owner ?? "", "done": $0.isDone] as [String: Any]
+            }
             dict["notes"] = m.enhancedNotes
             dict["transcript"] = m.transcriptText
             return dict

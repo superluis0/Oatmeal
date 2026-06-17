@@ -17,11 +17,12 @@ struct DigestView: View {
         var id: String { rawValue }
     }
 
+    @Environment(\.modelContext) private var context
     @State private var scopeKind: ScopeKind = .thisWeek
     @State private var folderName = ""
     @State private var tagName = ""
     @State private var personName = ""
-    @State private var digest: String?
+    @State private var saved: SavedReport?
     @State private var generating = false
     @State private var error: String?
 
@@ -37,18 +38,15 @@ struct DigestView: View {
                         HStack { ProgressView().controlSize(.small); Text("Generating digest…") }
                             .frame(maxWidth: .infinity)
                     } else {
-                        Label("Generate digest", systemImage: "sparkles").frame(maxWidth: .infinity)
+                        Label(saved == nil ? "Generate digest" : "Regenerate digest", systemImage: "sparkles")
+                            .frame(maxWidth: .infinity)
                     }
                 }
                 .buttonStyle(OatPrimaryButton(fullWidth: true))
                 .disabled(generating || scoped.isEmpty)
 
-                if let digest {
-                    GroupBox {
-                        MarkdownView(markdown: MeetingCitations.rewrite(digest, meetings: scoped))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                    } label: { Label("Digest", systemImage: "doc.text.magnifyingglass") }
+                if let saved {
+                    reportCard(saved)
                     includedList
                 } else if !generating {
                     OatEmptyState(
@@ -71,6 +69,7 @@ struct DigestView: View {
             return .systemAction
         })
         .navigationTitle("Digest")
+        .onAppear { loadSaved() }
         .alert("Couldn't generate digest", isPresented: Binding(
             get: { error != nil }, set: { if !$0 { error = nil } }
         )) { Button("OK", role: .cancel) { error = nil } } message: { Text(error ?? "") }
@@ -85,7 +84,7 @@ struct DigestView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .onChange(of: scopeKind) { _, _ in digest = nil }
+            .onChange(of: scopeKind) { _, _ in loadSaved() }
 
             switch scopeKind {
             case .folder:
@@ -93,19 +92,19 @@ struct DigestView: View {
                     Text("Choose…").tag("")
                     ForEach(folders) { Text($0.name).tag($0.name) }
                 }
-                .onChange(of: folderName) { _, _ in digest = nil }
+                .onChange(of: folderName) { _, _ in loadSaved() }
             case .tag:
                 Picker("Tag", selection: $tagName) {
                     Text("Choose…").tag("")
                     ForEach(allTags, id: \.self) { Text("#\($0)").tag($0) }
                 }
-                .onChange(of: tagName) { _, _ in digest = nil }
+                .onChange(of: tagName) { _, _ in loadSaved() }
             case .person:
                 Picker("Person", selection: $personName) {
                     Text("Choose…").tag("")
                     ForEach(allPeople, id: \.self) { Text($0).tag($0) }
                 }
-                .onChange(of: personName) { _, _ in digest = nil }
+                .onChange(of: personName) { _, _ in loadSaved() }
             default:
                 EmptyView()
             }
@@ -194,10 +193,57 @@ struct DigestView: View {
         }
     }
 
+    private var currentScopeRaw: String {
+        switch scopeKind {
+        case .thisWeek: return "thisWeek"
+        case .allTime: return "allTime"
+        case .folder: return "folder:\(folderName)"
+        case .tag: return "tag:\(tagName)"
+        case .person: return "person:\(personName)"
+        }
+    }
+
+    private func loadSaved() {
+        saved = ReportStore.fetch(kind: "digest", scopeRaw: currentScopeRaw, context: context)
+    }
+
+    @ViewBuilder
+    private func reportCard(_ report: SavedReport) -> some View {
+        let covered = meetings.filter { report.coveredIDs.contains($0.id) }
+        let stale = report.coveredIDs != Set(scoped.prefix(15).map(\.id))
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            if stale {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath")
+                    Text("Meetings changed since this digest.")
+                    Spacer()
+                    Button("Regenerate") { Task { await generate() } }.buttonStyle(.borderless)
+                }
+                .font(.caption).foregroundStyle(Theme.accent)
+                .padding(8)
+                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+            }
+            GroupBox {
+                MarkdownView(markdown: MeetingCitations.rewrite(report.markdown, meetings: covered))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            } label: {
+                HStack {
+                    Label("Digest", systemImage: "doc.text.magnifyingglass")
+                    Spacer()
+                    Text("Generated \(report.createdAt.formatted(.relative(presentation: .named))) · \(report.coveredIDs.count) meetings")
+                        .font(.caption2).foregroundStyle(Theme.textSecondary)
+                }
+            }
+        }
+    }
+
     private func generate() async {
+        guard !generating else { return }
         generating = true
         defer { generating = false }
-        let inputs = scoped.prefix(15).map { m in
+        let scopedMeetings = Array(scoped.prefix(15))
+        let inputs = scopedMeetings.map { m in
             DigestInput(
                 id: tag(m),
                 title: m.title,
@@ -207,7 +253,9 @@ struct DigestView: View {
             )
         }
         do {
-            digest = try await DigestService().digest(Array(inputs), scopeLabel: scopeLabel)
+            let markdown = try await DigestService().digest(inputs, scopeLabel: scopeLabel)
+            saved = ReportStore.upsert(kind: "digest", scopeRaw: currentScopeRaw,
+                                       markdown: markdown, meetingIDs: scopedMeetings.map(\.id), context: context)
         } catch {
             self.error = error.localizedDescription
         }

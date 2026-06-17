@@ -21,7 +21,7 @@ struct OatmealApp: App {
             Meeting.self, TranscriptSegment.self, Summary.self,
             Attendee.self, ChatMessage.self, Folder.self,
             CustomTemplate.self, Recipe.self, ChatSession.self, EmbeddingChunk.self,
-            ActionItem.self, Highlight.self, MeetingPrep.self
+            ActionItem.self, Highlight.self, MeetingPrep.self, SavedReport.self
         ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {
@@ -168,6 +168,21 @@ struct OatmealApp: App {
         KeyboardShortcuts.onKeyUp(for: .markMoment) {
             Task { @MainActor in coordinator.markHighlight(context: container.mainContext) }
         }
+        KeyboardShortcuts.onKeyUp(for: .quickAsk) {
+            Task { @MainActor in
+                guard AppSettings.globalHotkeysEnabled else { return }
+                QuickAskController.shared.toggle()
+            }
+        }
+        KeyboardShortcuts.onKeyUp(for: .copyRecap) {
+            Task { @MainActor in
+                guard AppSettings.globalHotkeysEnabled else { return }
+                RecapPaste.pasteLatestRecap()
+            }
+        }
+
+        // Watch the MCP command inbox for guarded agent writes (no-op unless enabled).
+        MCPCommandInbox.shared.start(context: container.mainContext)
     }
 }
 
@@ -179,6 +194,17 @@ final class AppLifecycle {
     weak var coordinator: RecordingCoordinator?
     var context: ModelContext?
     private init() {}
+
+    /// Wait briefly for the app to finish launching so App Intents (which may have
+    /// just launched the app via `openAppWhenRun`) can read the live store. Returns
+    /// nil if it never becomes available.
+    func awaitContext() async -> ModelContext? {
+        for _ in 0..<60 {
+            if let context { return context }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return context
+    }
 }
 
 /// Reopens the main window on demand. `NSApp.activate` alone can't recreate a

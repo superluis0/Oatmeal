@@ -32,6 +32,9 @@ struct SettingsView: View {
     @Bindable private var appearance = Appearance.shared
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openWindow) private var openWindow
+    @State private var shortcutsEnabled: Bool = AppSettings.shortcutsEnabled
+    @State private var globalHotkeysEnabled: Bool = AppSettings.globalHotkeysEnabled
+    @State private var mcpWriteEnabled: Bool = AppSettings.mcpWriteEnabled
     @Query private var allMeetings: [Meeting]
 
     var body: some View {
@@ -308,6 +311,37 @@ struct SettingsView: View {
                 TextField("Webhook URL", text: $webhookURL, prompt: Text("https://hooks.slack.com/…"))
                     .onChange(of: webhookURL) { _, new in AppSettings.webhookURL = new }
                 Text("When set, Oatmeal POSTs each finished meeting's summary + action items to this URL (Slack-compatible). Leave empty to keep everything local.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Automation") {
+                Toggle("Shortcuts, Spotlight & Siri", isOn: $shortcutsEnabled)
+                    .onChange(of: shortcutsEnabled) { _, new in AppSettings.shortcutsEnabled = new }
+                Text("Drive Oatmeal from the macOS Shortcuts app, Spotlight, and Siri — ask across your meetings, summarize the last one, list action items, find a meeting, or start recording. Runs on-device; nothing leaves your Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Toggle("Global quick-ask & paste-recap hotkeys", isOn: $globalHotkeysEnabled)
+                    .onChange(of: globalHotkeysEnabled) { _, new in AppSettings.globalHotkeysEnabled = new }
+                if globalHotkeysEnabled {
+                    KeyboardShortcuts.Recorder("Quick-ask anywhere", name: .quickAsk)
+                    KeyboardShortcuts.Recorder("Paste last recap into the front app", name: .copyRecap)
+                }
+                Text("Quick-ask opens a floating box to ask across your meetings from any app. Paste-recap drops your last meeting's recap into whatever you're typing in — grant Accessibility to auto-paste, otherwise it's copied to the clipboard.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Toggle("Let the MCP server write (append notes)", isOn: $mcpWriteEnabled)
+                    .onChange(of: mcpWriteEnabled) { _, new in
+                        AppSettings.mcpWriteEnabled = new
+                        MCPCommandInbox.shared.setEnabled(new)
+                    }
+                Text("The local MCP server already lets AI agents (like Claude) read your meetings on-device. Turn this on to also let them make guarded writes — e.g. append a note to a meeting. Off by default; reads are always available.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

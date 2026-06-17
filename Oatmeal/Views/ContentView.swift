@@ -41,6 +41,8 @@ struct ContentView: View {
     /// Surfaces a restart prompt when the persistent store fails at the SQLite level
     /// mid-session — better than limping on toward a fault-fulfillment trap.
     @State private var storeHealth = StoreHealth.shared
+    /// "What's new" card shown once after an update (first launch on a new version).
+    @State private var whatsNew: WhatsNewInfo?
 
     private func resetDestinations() {
         showGlobalChat = false; showPeople = false; showTasks = false
@@ -249,6 +251,7 @@ struct ContentView: View {
                 Log.lastCrashReport = nil
             }
             UpdateChecker.shared.checkIfDue()
+            showWhatsNewIfUpdated()
         }
         .onDisappear { detector.stopMonitoring() }
         .alert("Oatmeal quit unexpectedly last time", isPresented: Binding(
@@ -297,6 +300,9 @@ struct ContentView: View {
                 .padding(.top, Theme.Space.sm)
                 .zIndex(20)
             }
+        }
+        .sheet(item: $whatsNew) { info in
+            WhatsNewSheet(version: info.version, bullets: info.bullets) { whatsNew = nil }
         }
         .sheet(isPresented: $showPalette) {
             CommandPaletteView(
@@ -359,6 +365,18 @@ struct ContentView: View {
 
     // MARK: - Actions
 
+    /// On the first launch after the app's version changes, surface the "What's new"
+    /// card once. Skips fresh installs — only fires on a genuine update from a known
+    /// prior version.
+    private func showWhatsNewIfUpdated() {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let prior = AppSettings.lastSeenVersion
+        if !v.isEmpty { AppSettings.lastSeenVersion = v }
+        guard !prior.isEmpty, prior != v, AppSettings.hasOnboarded,
+              let bullets = WhatsNew.bullets(for: v) else { return }
+        whatsNew = WhatsNewInfo(version: v, bullets: bullets)
+    }
+
     private func toggleRecording() {
         Task {
             if coordinator.isRecording {
@@ -388,7 +406,15 @@ struct ContentView: View {
         // rather than letting the cancel-and-overwrite below drop it — otherwise
         // the first meeting silently reappears (it was never actually deleted).
         if let prior = pendingDelete, prior.id != meeting.id, prior.isAlive {
-            MeetingStore.delete(prior, context: context)
+            // Clear any reference to `prior` (it may still be the selection, with an
+            // open detail/triage sheet bound to it) BEFORE invalidating it, and defer
+            // the delete to the next main-actor turn so the selection-clear render
+            // lands first — otherwise a mid-layout read of the just-deleted meeting
+            // can trap.
+            if selection?.id == prior.id { selection = nil }
+            Task { @MainActor in
+                if prior.isAlive { MeetingStore.delete(prior, context: context) }
+            }
         }
         withAnimation { pendingDelete = meeting }
         deleteTask = Task {

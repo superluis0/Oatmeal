@@ -9,6 +9,11 @@ struct MeetingSummary: Sendable {
 /// Summarizes a transcript via the local LM Studio server.
 struct SummarizationService {
     private let client = LMStudioClient()
+    // NB: deliberately NO max_tokens cap on the summary calls. Reasoning models
+    // (Qwen3, etc.) spend reasoning tokens against the same completion budget, so a
+    // cap that looks generous can be fully consumed by reasoning before any answer
+    // is emitted — yielding an empty summary. Let the server default govern length;
+    // the detailed prompt is what makes summaries longer.
 
     func summarize(transcript: String, title: String? = nil, attendees: [String] = [], identity: String = "") async throws -> MeetingSummary {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -40,17 +45,33 @@ struct SummarizationService {
         }
         let identityBlock = identity.isEmpty ? "" : "\n\(identity)\n"
         return """
-        You are an expert meeting-notes analyst. Write specific, information-dense notes
-        that someone who missed the meeting could fully rely on.
+        You are an expert meeting-notes analyst. Write thorough, specific, information-dense
+        notes that someone who missed the entire meeting could rely on in place of having
+        been there — not a terse blurb.
         \(context.isEmpty ? "" : "\n\(context)")\(identityBlock)
-        Respond with ONLY a JSON object of the form:
-        {"summary": "<a substantive overview: what the meeting was about, the concrete \
-        decisions reached, key numbers/dates/names, any disagreements, and what is still \
-        open. Several specific sentences — never generic filler.>",
-         "keyPoints": ["<specific takeaways: decisions, facts, figures, named owners — not vague themes>"],
-         "actionItems": ["<concrete commitments, including the owner when stated>"]}
-        Rules: ground every statement in the transcript; prefer specifics (names, numbers,
-        dates, quotes) over generalities; never invent facts not present. Output only the JSON.
+        Format your ENTIRE response EXACTLY like this — the three header lines verbatim, in
+        this order, nothing before the first header, no JSON, no code fences:
+
+        ===SUMMARY===
+        <A well-structured GitHub-flavored Markdown summary whose depth scales to how much was
+        actually discussed. Open with one or two sentences on what the meeting was about and the
+        headline outcome. Then, for a substantive meeting, break the body into short thematic
+        sections, each with a `## ` heading naming a topic actually discussed — covering what was
+        discussed, the reasoning and any disagreement, the specific numbers / dates / names, and
+        what was decided or left open. A short or low-content meeting stays short: two or three
+        sentences, no headings. Never pad or invent structure that was not there.>
+
+        ===KEY POINTS===
+        - <the most important specific takeaways: decisions, facts, figures, named owners — not vague themes>
+
+        ===ACTION ITEMS===
+        - <a concrete commitment, including the owner and any due date when stated>
+
+        Write naturally — quotes, apostrophes, and Markdown all belong in the SUMMARY section and
+        need no escaping. If a section genuinely has nothing, leave it empty but keep its header.
+        Rules: ground every statement in the transcript; prefer specifics (names, numbers, dates,
+        short quotes) over generalities; never invent facts; don't repeat the same point across
+        sections or restate the key points / action items verbatim inside the summary.
         """
     }
 
@@ -65,9 +86,10 @@ struct SummarizationService {
         var partials: [String] = []
         for (i, window) in windows.enumerated() {
             let sys = """
-            Summarize part \(i + 1) of \(windows.count) of a meeting transcript into 3–6 dense
-            bullet points capturing decisions, facts, numbers, named owners, and open questions.
-            Be specific. Output ONLY the bullets.
+            Summarize part \(i + 1) of \(windows.count) of a meeting transcript into 4–8 dense
+            bullet points. Capture the topics discussed, decisions, facts, numbers, named owners,
+            disagreements, and open questions — keep every concrete detail and be specific.
+            Output ONLY the bullets.
             """
             if let c = try? await client.chat(messages: [.system(sys), .user(window)], temperature: 0.3) {
                 partials.append("Part \(i + 1):\n\(c.trimmingCharacters(in: .whitespacesAndNewlines))")
@@ -92,7 +114,9 @@ struct SummarizationService {
         let combined = partials.joined(separator: "\n\n")
         let user = """
         Below are ordered partial notes covering the WHOLE meeting in sequence. Synthesize
-        them into the final notes JSON, de-duplicating and keeping every specific detail:
+        them into the final notes using the exact ===SUMMARY=== / ===KEY POINTS=== /
+        ===ACTION ITEMS=== format, organizing the summary into thematic sections as
+        instructed, de-duplicating, and keeping every specific detail:
 
         \(combined)
         """
@@ -120,22 +144,80 @@ struct SummarizationService {
     // MARK: - Parsing
 
     private func parse(_ content: String) -> MeetingSummary {
-        if let jsonString = extractJSON(from: content),
-           let data = jsonString.data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let summary = (obj["summary"] as? String) ?? ""
-            let actions = (obj["actionItems"] as? [String]) ?? (obj["action_items"] as? [String]) ?? []
-            let points = (obj["keyPoints"] as? [String]) ?? (obj["key_points"] as? [String]) ?? []
-            if !summary.isEmpty || !actions.isEmpty || !points.isEmpty {
-                return MeetingSummary(text: summary, actionItems: actions, keyPoints: points)
+        let cleaned = stripCodeFence(content.trimmingCharacters(in: .whitespacesAndNewlines))
+        // Preferred: the delimited ===SECTION=== format. It needs no escaping, so a
+        // Markdown summary full of quotes/newlines round-trips intact — unlike JSON,
+        // where one unescaped quote ("force multiplier") breaks the whole parse.
+        if let summary = parseDelimited(cleaned) { return summary }
+        // Back-compat: a model that still emitted a JSON object (older prompt). Try it
+        // as-is, then with control chars inside strings escaped.
+        if let raw = extractJSON(from: cleaned) {
+            for candidate in [raw, escapeControlCharsInStrings(raw)] {
+                if let summary = decode(candidate) { return summary }
             }
         }
-        // Fallback: store raw content.
-        return MeetingSummary(
-            text: content.trimmingCharacters(in: .whitespacesAndNewlines),
-            actionItems: [],
-            keyPoints: []
-        )
+        // Last resort: keep the model's prose as the summary rather than dropping it.
+        return MeetingSummary(text: cleaned, actionItems: [], keyPoints: [])
+    }
+
+    /// Parses the delimited `===SUMMARY=== / ===KEY POINTS=== / ===ACTION ITEMS===`
+    /// format. Tolerant of case and surrounding whitespace; returns nil when the
+    /// SUMMARY marker is absent (so `parse` can fall through to the JSON path).
+    private func parseDelimited(_ text: String) -> MeetingSummary? {
+        func marker(_ name: String) -> Range<String.Index>? {
+            text.range(of: "===\(name)===", options: .caseInsensitive)
+        }
+        guard let sumR = marker("SUMMARY") else { return nil }
+        let kpR = marker("KEY POINTS")
+        let aiR = marker("ACTION ITEMS")
+
+        let afterSum = sumR.upperBound
+        let sumEnd = [kpR?.lowerBound, aiR?.lowerBound]
+            .compactMap { $0 }.filter { $0 >= afterSum }.min() ?? text.endIndex
+        let summary = String(text[afterSum..<sumEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var keyPoints: [String] = []
+        if let kpR, kpR.upperBound >= afterSum {
+            let kpEnd = aiR.map(\.lowerBound).flatMap { $0 >= kpR.upperBound ? $0 : nil } ?? text.endIndex
+            keyPoints = bulletLines(in: String(text[kpR.upperBound..<kpEnd]))
+        }
+        var actionItems: [String] = []
+        if let aiR {
+            actionItems = bulletLines(in: String(text[aiR.upperBound...]))
+        }
+        guard !summary.isEmpty || !keyPoints.isEmpty || !actionItems.isEmpty else { return nil }
+        return MeetingSummary(text: summary, actionItems: actionItems, keyPoints: keyPoints)
+    }
+
+    /// Pulls clean bullet strings out of a block, stripping `-`/`*`/`•` and `1.`
+    /// markers and dropping blank lines.
+    private func bulletLines(in block: String) -> [String] {
+        block.components(separatedBy: "\n")
+            .map { line -> String in
+                var l = line.trimmingCharacters(in: .whitespaces)
+                for p in ["- ", "* ", "• ", "– ", "— "] where l.hasPrefix(p) {
+                    l = String(l.dropFirst(p.count)); break
+                }
+                if let r = l.range(of: "^[0-9]+[.)]\\s+", options: .regularExpression) {
+                    l = String(l[r.upperBound...])
+                }
+                return l.trimmingCharacters(in: .whitespaces)
+            }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Parses one JSON-object candidate into a summary, or nil if it isn't valid
+    /// JSON or carries none of the expected fields.
+    private func decode(_ jsonString: String) -> MeetingSummary? {
+        guard let data = jsonString.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let summary = (obj["summary"] as? String) ?? ""
+        let actions = (obj["actionItems"] as? [String]) ?? (obj["action_items"] as? [String]) ?? []
+        let points = (obj["keyPoints"] as? [String]) ?? (obj["key_points"] as? [String]) ?? []
+        guard !summary.isEmpty || !actions.isEmpty || !points.isEmpty else { return nil }
+        return MeetingSummary(text: summary, actionItems: actions, keyPoints: points)
     }
 
     private func extractJSON(from content: String) -> String? {
@@ -144,5 +226,48 @@ struct SummarizationService {
             return nil
         }
         return String(content[start...end])
+    }
+
+    /// Escapes raw newlines / tabs that appear *inside* JSON string values — the
+    /// usual reason a local model's otherwise-valid JSON fails to parse once the
+    /// summary spans multiple lines. Walks the text tracking string context so
+    /// structural whitespace between tokens is left untouched, and never
+    /// double-escapes a character that was already escaped.
+    private func escapeControlCharsInStrings(_ json: String) -> String {
+        var out = ""
+        out.reserveCapacity(json.count + 16)
+        var inString = false
+        var escaped = false
+        for ch in json {
+            if escaped {
+                out.append(ch)
+                escaped = false
+                continue
+            }
+            switch ch {
+            case "\\":
+                out.append(ch)
+                escaped = true
+            case "\"":
+                inString.toggle()
+                out.append(ch)
+            case "\n" where inString: out += "\\n"
+            case "\r" where inString: out += "\\r"
+            case "\t" where inString: out += "\\t"
+            default:
+                out.append(ch)
+            }
+        }
+        return out
+    }
+
+    /// Some models wrap their JSON or Markdown in a ``` fence; strip it so the
+    /// raw-content fallback doesn't render the fence.
+    private func stripCodeFence(_ text: String) -> String {
+        guard text.hasPrefix("```") else { return text }
+        var lines = text.components(separatedBy: "\n")
+        if lines.first?.hasPrefix("```") == true { lines.removeFirst() }
+        if lines.last?.trimmingCharacters(in: .whitespaces) == "```" { lines.removeLast() }
+        return lines.joined(separator: "\n")
     }
 }

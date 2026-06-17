@@ -89,15 +89,20 @@ struct GlobalChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    if (session?.messages.isEmpty ?? true) {
+                    let msgs = session?.orderedMessages ?? []
+                    if msgs.isEmpty {
                         emptyState
                     }
-                    ForEach(session?.orderedMessages ?? []) { msg in
+                    ForEach(Array(msgs.enumerated()), id: \.element.persistentModelID) { idx, msg in
+                        if idx == 0 || !Calendar.current.isDate(msg.createdAt, inSameDayAs: msgs[idx - 1].createdAt) {
+                            ChatDateSeparator(date: msg.createdAt)
+                        }
                         VStack(alignment: .leading, spacing: 4) {
                             ChatBubble(role: msg.role,
                                        text: msg.role == "assistant"
                                             ? MeetingCitations.rewrite(msg.text, meetings: scopedMeetings())
-                                            : msg.text)
+                                            : msg.text,
+                                       timestamp: msg.createdAt)
                             if msg.role == "assistant" {
                                 sourceChips(for: msg.text)
                             }
@@ -250,6 +255,11 @@ struct GlobalChatView: View {
         defer { isSending = false }
 
         guard session.modelContext != nil else { return }
+        // The reply can take minutes on a slow local model. Capture the scope key so
+        // we can re-fetch a fresh session after the await instead of mutating the
+        // captured handle if it faulted out — saving against a stale object traps
+        // uncatchably inside CoreData (see SafeStore). Scope is unique per session.
+        let scopeRaw = session.scopeRaw
         let history = session.orderedMessages.map { (role: $0.role, text: $0.text) }
         let userMsg = ChatMessage(role: "user", text: question)
         context.insert(userMsg)
@@ -262,10 +272,19 @@ struct GlobalChatView: View {
                 context: buildContext(),
                 history: history
             )
-            guard session.modelContext != nil else { return }
+            // Re-fetch the session fresh after the await rather than trusting the
+            // captured handle; a nil result drops the reply cleanly instead of
+            // crashing on a stale object.
+            var descriptor = FetchDescriptor<ChatSession>(predicate: #Predicate { $0.scopeRaw == scopeRaw })
+            descriptor.fetchLimit = 1
+            guard let liveSession = try? context.fetch(descriptor).first,
+                  !liveSession.isDeleted, liveSession.modelContext != nil else {
+                Log.warn("global chat reply dropped: session unavailable after reply", "chat")
+                return
+            }
             let reply = ChatMessage(role: "assistant", text: answer)
             context.insert(reply)
-            reply.session = session
+            reply.session = liveSession
             SafeStore.save(context, "globalchat:assistant")
         } catch {
             errorText = error.localizedDescription

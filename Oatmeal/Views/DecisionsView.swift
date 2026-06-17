@@ -13,8 +13,9 @@ struct DecisionsView: View {
         var id: String { rawValue }
     }
 
+    @Environment(\.modelContext) private var context
     @State private var scope: Scope = .thisWeek
-    @State private var decisions: String?
+    @State private var saved: SavedReport?
     @State private var generating = false
     @State private var error: String?
 
@@ -36,7 +37,7 @@ struct DecisionsView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .onChange(of: scope) { _, _ in decisions = nil }
+                .onChange(of: scope) { _, _ in loadSaved() }
 
                 Button {
                     Task { await generate() }
@@ -45,18 +46,15 @@ struct DecisionsView: View {
                         HStack { ProgressView().controlSize(.small); Text("Finding decisions…") }
                             .frame(maxWidth: .infinity)
                     } else {
-                        Label("Find decisions", systemImage: "checkmark.seal").frame(maxWidth: .infinity)
+                        Label(saved == nil ? "Find decisions" : "Refresh decisions", systemImage: "checkmark.seal")
+                            .frame(maxWidth: .infinity)
                     }
                 }
                 .buttonStyle(OatPrimaryButton(fullWidth: true))
                 .disabled(generating || scoped.isEmpty)
 
-                if let decisions {
-                    GroupBox {
-                        MarkdownView(markdown: MeetingCitations.rewrite(decisions, meetings: scoped))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                    } label: { Label("Decisions", systemImage: "checkmark.seal.fill") }
+                if let saved {
+                    reportCard(saved)
                 } else if !generating {
                     OatEmptyState(
                         icon: "checkmark.seal",
@@ -78,15 +76,55 @@ struct DecisionsView: View {
             return .systemAction
         })
         .navigationTitle("Decisions")
+        .onAppear { loadSaved() }
         .alert("Couldn't extract decisions", isPresented: Binding(
             get: { error != nil }, set: { if !$0 { error = nil } }
         )) { Button("OK", role: .cancel) { error = nil } } message: { Text(error ?? "") }
     }
 
+    private var currentScopeRaw: String { scope == .thisWeek ? "thisWeek" : "allTime" }
+
+    private func loadSaved() {
+        saved = ReportStore.fetch(kind: "decisions", scopeRaw: currentScopeRaw, context: context)
+    }
+
+    @ViewBuilder
+    private func reportCard(_ report: SavedReport) -> some View {
+        let covered = meetings.filter { report.coveredIDs.contains($0.id) }
+        let stale = report.coveredIDs != Set(scoped.prefix(15).map(\.id))
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            if stale {
+                HStack(spacing: 6) {
+                    Image(systemName: "clock.arrow.circlepath")
+                    Text("Meetings changed since this was generated.")
+                    Spacer()
+                    Button("Refresh") { Task { await generate() } }.buttonStyle(.borderless)
+                }
+                .font(.caption).foregroundStyle(Theme.accent)
+                .padding(8)
+                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+            }
+            GroupBox {
+                MarkdownView(markdown: MeetingCitations.rewrite(report.markdown, meetings: covered))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            } label: {
+                HStack {
+                    Label("Decisions", systemImage: "checkmark.seal.fill")
+                    Spacer()
+                    Text("Generated \(report.createdAt.formatted(.relative(presentation: .named))) · \(report.coveredIDs.count) meetings")
+                        .font(.caption2).foregroundStyle(Theme.textSecondary)
+                }
+            }
+        }
+    }
+
     private func generate() async {
+        guard !generating else { return }
         generating = true
         defer { generating = false }
-        let inputs = scoped.prefix(15).map { m in
+        let scopedMeetings = Array(scoped.prefix(15))
+        let inputs = scopedMeetings.map { m in
             DigestInput(
                 id: String(m.id.uuidString.prefix(MeetingCitations.tagLength)).lowercased(),
                 title: m.title,
@@ -96,7 +134,9 @@ struct DecisionsView: View {
             )
         }
         do {
-            decisions = try await DecisionsService().decisions(Array(inputs), scopeLabel: scope.rawValue.lowercased())
+            let markdown = try await DecisionsService().decisions(inputs, scopeLabel: scope.rawValue.lowercased())
+            saved = ReportStore.upsert(kind: "decisions", scopeRaw: currentScopeRaw,
+                                       markdown: markdown, meetingIDs: scopedMeetings.map(\.id), context: context)
         } catch {
             self.error = error.localizedDescription
         }

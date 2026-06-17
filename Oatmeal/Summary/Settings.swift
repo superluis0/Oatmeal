@@ -174,4 +174,32 @@ enum AppSettings {
         get { (UserDefaults.standard.object(forKey: floatingPanelAutoKey) as? Bool) ?? true }
         set { UserDefaults.standard.set(newValue, forKey: floatingPanelAutoKey) }
     }
+
+    /// Power-user: expose Oatmeal's actions to the macOS Shortcuts app, Spotlight,
+    /// and Siri via App Intents. Default OFF — the user opts in (Settings → Automation).
+    static var shortcutsEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "shortcutsEnabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "shortcutsEnabled") }
+    }
+
+    /// The app version the user last saw the "What's new" card for, so it appears
+    /// once after each update.
+    static var lastSeenVersion: String {
+        get { UserDefaults.standard.string(forKey: "lastSeenVersion") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "lastSeenVersion") }
+    }
+
+    /// Power-user: global hotkeys for quick-ask (ask across meetings from anywhere)
+    /// and paste-recap (drop the last recap into the frontmost app). Default OFF.
+    static var globalHotkeysEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "globalHotkeysEnabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "globalHotkeysEnabled") }
+    }
+
+    /// Power-user: let the local MCP server make guarded WRITES (e.g. append a note)
+    /// back into the store on your behalf. Default OFF — reads are always available.
+    static var mcpWriteEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "mcpWriteEnabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "mcpWriteEnabled") }
+    }
 }

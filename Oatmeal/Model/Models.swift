@@ -224,12 +224,21 @@ final class Meeting {
         guard old != new else { return }
         // Carry the speaker's tasks over to the new name too.
         relabelOwners(from: old, to: new)
-        guard let s = liveSummary else { return }
+        patchSummaryName(from: old, to: new)
+    }
+
+    /// Whole-word replace one display name with another across the existing summary
+    /// (prose / key points / action items), then re-stamp the staleness signature so
+    /// the now-corrected summary doesn't immediately read as stale. Used by BOTH
+    /// rename and merge to keep the summary in sync **cheaply** (no LLM). No-op
+    /// without a summary or when nothing changes. MUST be called *after* the
+    /// transcript-affecting mutation (the `speakerNames` change or segment
+    /// reassignment) so the re-stamped hash reflects the final transcript.
+    func patchSummaryName(from old: String, to new: String) {
+        guard old != new, let s = liveSummary else { return }
         s.text = Meeting.replacingWholeWord(old, with: new, in: s.text)
         s.keyPoints = s.keyPoints.map { Meeting.replacingWholeWord(old, with: new, in: $0) }
         s.actionItems = s.actionItems.map { Meeting.replacingWholeWord(old, with: new, in: $0) }
-        // A rename changes the grounded-transcript hash, so without re-stamping the
-        // correctly-patched summary would immediately read as stale.
         s.transcriptSignature = currentSummarySignatureHash
     }
 

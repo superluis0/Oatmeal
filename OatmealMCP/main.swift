@@ -36,6 +36,26 @@ func textResult(_ text: String) -> [String: Any] {
     ["content": [["type": "text", "text": text]]]
 }
 
+func supportDir() -> URL? {
+    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("Oatmeal", isDirectory: true)
+}
+
+/// True when the user has enabled MCP writes in Oatmeal (the app maintains this flag file).
+func writeEnabled() -> Bool {
+    guard let f = supportDir()?.appendingPathComponent("mcp-write-enabled") else { return false }
+    return FileManager.default.fileExists(atPath: f.path)
+}
+
+/// Drop a command into the app's inbox for it to apply (guarded writes).
+func queueCommand(_ cmd: [String: Any]) -> Bool {
+    guard let inbox = supportDir()?.appendingPathComponent("mcp-commands", isDirectory: true),
+          let data = try? JSONSerialization.data(withJSONObject: cmd) else { return false }
+    try? FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: true)
+    let name = "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(8)).json"
+    return (try? data.write(to: inbox.appendingPathComponent(name))) != nil
+}
+
 // MARK: - Tool definitions
 
 let tools: [[String: Any]] = [
@@ -61,6 +81,29 @@ let tools: [[String: Any]] = [
             "properties": ["query": ["type": "string", "description": "Search text"]],
             "required": ["query"]
         ]
+    ],
+    [
+        "name": "get_action_items",
+        "description": "List action items across meetings — by default only OPEN (not done). Optional owner filter.",
+        "inputSchema": ["type": "object", "properties": [
+            "owner": ["type": "string", "description": "Only items owned by this person (optional)"],
+            "include_done": ["type": "boolean", "description": "Include completed items (default false)"]
+        ]]
+    ],
+    [
+        "name": "get_commitments",
+        "description": "Open action items grouped by owner — who owes what. Optional person filter.",
+        "inputSchema": ["type": "object", "properties": [
+            "person": ["type": "string", "description": "Only this person's commitments (optional)"]
+        ]]
+    ],
+    [
+        "name": "append_note",
+        "description": "Append a note to a meeting by id. Requires the user to have enabled MCP writes in Oatmeal.",
+        "inputSchema": ["type": "object", "properties": [
+            "meeting_id": ["type": "string", "description": "Meeting id (UUID)"],
+            "text": ["type": "string", "description": "Note text to append"]
+        ], "required": ["meeting_id", "text"]]
     ]
 ]
 
@@ -126,6 +169,55 @@ func callTool(name: String, arguments: [String: Any]) -> [String: Any] {
         }
         if hits.isEmpty { return textResult("No meetings matched “\(arguments["query"] as? String ?? "")”.") }
         return textResult(hits.map(meetingSummaryLine).joined(separator: "\n"))
+
+    case "get_action_items":
+        let owner = (arguments["owner"] as? String ?? "").lowercased()
+        let includeDone = arguments["include_done"] as? Bool ?? false
+        var lines: [String] = []
+        for m in meetings {
+            let title = m["title"] as? String ?? "Untitled"
+            for t in (m["tasks"] as? [[String: Any]] ?? []) {
+                let done = t["done"] as? Bool ?? false
+                if !includeDone && done { continue }
+                let tOwner = t["owner"] as? String ?? ""
+                if !owner.isEmpty && !tOwner.lowercased().contains(owner) { continue }
+                let mark = done ? "[x]" : "[ ]"
+                let who = tOwner.isEmpty ? "" : " — \(tOwner)"
+                lines.append("\(mark) \(t["text"] as? String ?? "")\(who)  ·  \(title)")
+            }
+        }
+        return textResult(lines.isEmpty ? "No matching action items." : lines.joined(separator: "\n"))
+
+    case "get_commitments":
+        let person = (arguments["person"] as? String ?? "").lowercased()
+        var byOwner: [String: [String]] = [:]
+        for m in meetings {
+            let title = m["title"] as? String ?? "Untitled"
+            for t in (m["tasks"] as? [[String: Any]] ?? []) where !((t["done"] as? Bool) ?? false) {
+                let o = t["owner"] as? String ?? ""
+                let owner = o.isEmpty ? "Unassigned" : o
+                if !person.isEmpty && !owner.lowercased().contains(person) { continue }
+                byOwner[owner, default: []].append("• \(t["text"] as? String ?? "")  (\(title))")
+            }
+        }
+        if byOwner.isEmpty { return textResult("No open commitments.") }
+        return textResult(byOwner.sorted { $0.key < $1.key }
+            .map { "\($0.key):\n" + $0.value.joined(separator: "\n") }
+            .joined(separator: "\n\n"))
+
+    case "append_note":
+        guard writeEnabled() else {
+            return textResult("Writing is turned off. Enable \u{201C}Let the MCP server write\u{201D} in Oatmeal → Settings → Automation, then try again.")
+        }
+        let mid = arguments["meeting_id"] as? String ?? ""
+        let text = arguments["text"] as? String ?? ""
+        guard !mid.isEmpty, !text.isEmpty else { return textResult("Provide meeting_id and text.") }
+        guard meetings.contains(where: { ($0["id"] as? String)?.lowercased() == mid.lowercased() }) else {
+            return textResult("No meeting with id \(mid).")
+        }
+        return textResult(queueCommand(["op": "append_note", "meetingId": mid, "text": text])
+            ? "Queued — Oatmeal will append the note shortly."
+            : "Couldn't queue the note.")
 
     default:
         return textResult("Unknown tool: \(name)")

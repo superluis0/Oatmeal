@@ -1283,6 +1283,9 @@ struct MeetingDetailView: View {
             for seg in meeting.orderedSegments where seg.speaker == from { seg.speaker = target }
             meeting.speakerNames[from] = nil
             meeting.relabelOwners(from: fromName, to: toName)
+            // Keep the summary textually in sync with the merge (same cheap no-LLM
+            // path as rename) so it stops showing the merged-away "Speaker N".
+            meeting.patchSummaryName(from: fromName, to: toName)
             SafeStore.save(context, "merge-speaker")
             SemanticIndex(context: context).reindex(meeting)
         }

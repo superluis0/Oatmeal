@@ -73,7 +73,13 @@ enum StoreBackup {
         if let f = m.folder?.name { dict["folder"] = f }
         dict["attendees"] = m.attendees.map { ["name": $0.name, "email": $0.email ?? ""] }
         if let s = m.summary {
-            dict["summary"] = ["text": s.text, "keyPoints": s.keyPoints, "actionItems": s.actionItems]
+            var sd: [String: Any] = ["text": s.text, "keyPoints": s.keyPoints, "actionItems": s.actionItems]
+            // Persist the staleness signature too. Without it, every restored summary
+            // comes back with a nil signature → `summaryIsStale` is always false → the
+            // "Update summary" banner can never appear after a restore (which this
+            // store does often). Speaker fixes then silently never reach the summary.
+            if let sig = s.transcriptSignature { sd["transcriptSignature"] = sig }
+            dict["summary"] = sd
         }
         dict["actionItems"] = m.actionItems.map { a -> [String: Any] in
             var d: [String: Any] = ["text": a.text, "isDone": a.isDone]
@@ -150,6 +156,9 @@ enum StoreBackup {
                 let summary = Summary(text: s["text"] as? String ?? "",
                                       actionItems: s["actionItems"] as? [String] ?? [],
                                       keyPoints: s["keyPoints"] as? [String] ?? [])
+                // Restore the staleness signature so speaker-fix detection keeps working
+                // across a restore (see the encode side).
+                summary.transcriptSignature = s["transcriptSignature"] as? String
                 context.insert(summary); meeting.summary = summary
             }
             for a in (m["actionItems"] as? [[String: Any]] ?? []) {

@@ -51,6 +51,10 @@ final class RecordingCoordinator {
     private var timer: Timer?
     private var liveTask: Task<Void, Never>?
     private var startDate: Date?
+    /// Set by `stop()` when a Stop lands during the start-up window (model prep /
+    /// permission prompt), so the in-flight `start()` aborts cleanly instead of
+    /// proceeding to a recording the user tried to cancel.
+    private var cancelStartRequested = false
 
     // Live streaming caption text per source.
     private var liveMe = ""
@@ -114,14 +118,22 @@ final class RecordingCoordinator {
         captureWarning = nil
         systemAudioMissing = false
 
+        // Claim the lifecycle SYNCHRONOUSLY, before the first await, so a second
+        // Record tap (double-click, or ⌘R racing the on-screen button) bails at the
+        // `guard phase == .idle` above instead of starting a parallel recording.
+        // `cancelStartRequested` lets a Stop pressed during this start-up window
+        // abort the start cleanly (see stop()).
+        phase = .preparingModels
+        cancelStartRequested = false
+
         // Permissions
         let micOK = await AudioCaptureEngine.requestMicrophoneAccess()
         guard micOK else {
             phase = .error("Microphone access denied. Enable it in System Settings → Privacy & Security → Microphone.")
             return
         }
+        if cancelStartRequested { cancelStartRequested = false; phase = .idle; return }
 
-        phase = .preparingModels
         do {
             try await transcription.prepare()
             // Models are now on disk — safe to prewarm them on future launches.
@@ -130,6 +142,7 @@ final class RecordingCoordinator {
             phase = .error("Failed to load speech models: \(error.localizedDescription)")
             return
         }
+        if cancelStartRequested { cancelStartRequested = false; phase = .idle; return }
 
         // Begin live streaming captions before audio starts flowing.
         let updates: AsyncStream<LiveUpdate>
@@ -137,6 +150,12 @@ final class RecordingCoordinator {
             updates = try await transcription.beginStreaming()
         } catch {
             phase = .error("Failed to start live transcription: \(error.localizedDescription)")
+            return
+        }
+        if cancelStartRequested {
+            cancelStartRequested = false
+            await transcription.endStreaming()
+            phase = .idle
             return
         }
 
@@ -159,6 +178,15 @@ final class RecordingCoordinator {
             engine.onSystemSamples = nil
             await transcription.endStreaming()
             phase = .error(error.localizedDescription)
+            return
+        }
+        if cancelStartRequested {
+            cancelStartRequested = false
+            engine.onMicSamples = nil
+            engine.onSystemSamples = nil
+            _ = engine.stop()
+            await transcription.endStreaming()
+            phase = .idle
             return
         }
         // Surface either warning; the engine-fallback note (Nemotron → Parakeet)
@@ -214,7 +242,13 @@ final class RecordingCoordinator {
     // MARK: - Stop
 
     func stop(context: ModelContext) async {
-        guard isRecording else { return }
+        guard isRecording else {
+            // A Stop during the start-up window (model prep / permission prompt)
+            // cancels the in-flight start, so "Record then immediately Stop" doesn't
+            // leave running a recording the user tried to abort.
+            if phase == .preparingModels { cancelStartRequested = true }
+            return
+        }
         Log.info("recording stop requested", "recording")
         liveTask?.cancel()
         liveTask = nil
@@ -491,7 +525,7 @@ final class RecordingCoordinator {
         let highlight = Highlight(time: elapsed)
         context.insert(highlight)
         highlight.meeting = meeting
-        SafeStore.save(context, "mark-highlight")
+        SafeStore.saveSoon(context, "mark-highlight")
         return true
     }
 
@@ -763,7 +797,7 @@ final class RecordingCoordinator {
     /// optionally with an explicit expected-speaker count. Replaces the existing
     /// transcript segments in place; no re-recording needed.
     func reidentifySpeakers(for meeting: Meeting, expectedSpeakers: Int?, context: ModelContext) async {
-        guard phase == .idle else { return }
+        guard phase == .idle, meeting.modelContext != nil else { return }
         guard let path = meeting.audioPath else {
             phase = .error("This meeting has no archived audio to re-process.")
             return
@@ -794,6 +828,9 @@ final class RecordingCoordinator {
             phase = .error("Re-identification failed: \(error.localizedDescription)")
             return
         }
+        // The meeting can be deleted during the multi-second diarization — bail
+        // before mutating a dead object (matches reprocessFromAudio/regenerateSummary).
+        guard meeting.modelContext != nil else { phase = .idle; return }
 
         // Replace the meeting's transcript segments.
         for seg in meeting.segments { context.delete(seg) }
@@ -852,6 +889,9 @@ final class RecordingCoordinator {
             phase = .error("Couldn't transcribe this recording — it may not contain usable speech.")
             return
         }
+        // The meeting can be deleted during the multi-second transcription — bail
+        // before mutating a dead object.
+        guard meeting.modelContext != nil else { phase = .idle; return }
 
         // Replace any existing (usually empty) transcript with the rebuilt one.
         for seg in meeting.segments { context.delete(seg) }
@@ -885,25 +925,33 @@ final class RecordingCoordinator {
         }
         let identity = MeetingIdentity.preamble(knownSpeakers: meeting.speakerNames)
         let transcript = MeetingIdentity.ground(transcript: raw, userName: AppSettings.userName)
+        // Capture the stable id: the summarize call can take minutes on a slow local
+        // model, after which the captured `meeting` handle may have faulted out.
+        // Mutating/saving it then traps uncatchably in CoreData (same class as the
+        // MeetingChatView.send crash), so re-fetch a fresh one after the await.
+        let meetingID = meeting.id
 
         phase = .processing("Regenerating summary…")
         do {
             let result = try await SummarizationService().summarize(
                 transcript: transcript, title: meeting.title,
                 attendees: meeting.attendeeNames, identity: identity)
-            guard meeting.modelContext != nil else { phase = .idle; return }
+            var fd = FetchDescriptor<Meeting>(predicate: #Predicate { $0.id == meetingID })
+            fd.fetchLimit = 1
+            guard let liveMeeting = try? context.fetch(fd).first,
+                  !liveMeeting.isDeleted, liveMeeting.modelContext != nil else { phase = .idle; return }
             // Point the meeting at the new summary BEFORE deleting the old one:
             // the moment context.delete() runs, any in-flight view render that
             // reads the old Summary's properties traps. Reordering keeps
             // meeting.summary valid at every observable step.
-            let old = meeting.summary
+            let old = liveMeeting.summary
             let summary = Summary(text: result.text, actionItems: result.actionItems, keyPoints: result.keyPoints)
             context.insert(summary)
-            meeting.summary = summary
+            liveMeeting.summary = summary
             summary.transcriptSignature = Meeting.signatureHash(forBasis: transcript)
             if let old { context.delete(old) }
             SafeStore.save(context, "resummarize")
-            SemanticIndex(context: context).reindex(meeting)
+            SemanticIndex(context: context).reindex(liveMeeting)
             StoreBackup.snapshot(context: context)
             phase = .idle
         } catch {
