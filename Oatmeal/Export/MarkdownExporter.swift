@@ -40,6 +40,38 @@ enum MarkdownExporter {
         pb.setString(markdown(for: meeting), forType: .string)
     }
 
+    /// A clean, shareable recap — title, date, attendees, summary, key points, and
+    /// action items, but NO transcript or raw notes, so it's safe to paste into Slack
+    /// or an email. Prefers the structured action items (with owners) when present.
+    static func recap(for meeting: Meeting) -> String {
+        var out = "# \(meeting.title)\n\n"
+        out += meeting.date.formatted(date: .abbreviated, time: .shortened) + "\n\n"
+        if !meeting.attendees.isEmpty {
+            out += "**Attendees:** " + meeting.attendees.map(\.name).joined(separator: ", ") + "\n\n"
+        }
+        if let s = meeting.summary {
+            if !s.text.isEmpty { out += "## Summary\n\n\(s.text)\n\n" }
+            if !s.keyPoints.isEmpty {
+                out += "## Key Points\n\n" + s.keyPoints.map { "- \($0)" }.joined(separator: "\n") + "\n\n"
+            }
+        }
+        let tasks = meeting.liveActionItems
+        if !tasks.isEmpty {
+            out += "## Action Items\n\n" + tasks.map { item in
+                "- " + (item.isDone ? "~~\(item.text)~~" : item.text) + (item.owner.map { " — \($0)" } ?? "")
+            }.joined(separator: "\n") + "\n\n"
+        } else if let s = meeting.summary, !s.actionItems.isEmpty {
+            out += "## Action Items\n\n" + s.actionItems.map { "- \($0)" }.joined(separator: "\n") + "\n\n"
+        }
+        return out
+    }
+
+    static func copyRecap(_ meeting: Meeting) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(recap(for: meeting), forType: .string)
+    }
+
     static func exportToFile(_ meeting: Meeting) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]

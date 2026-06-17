@@ -41,6 +41,9 @@ final class Meeting {
     /// The most recent on-demand coaching / framework-scoring output (Markdown),
     /// persisted so it survives leaving the Analytics tab. Empty until generated.
     var coachingNotes: String = ""
+    /// Topic chapters for the recording (regenerable from the transcript), for
+    /// jump-to-moment navigation. Codable value array — additive & migration-safe.
+    var chapters: [ChapterMark] = []
 
     @Relationship(deleteRule: .cascade, inverse: \TranscriptSegment.meeting)
     var segments: [TranscriptSegment]
@@ -401,6 +404,16 @@ struct NoteBlock: Codable, Hashable, Identifiable {
     var text: String
     var isAI: Bool
     var edited: Bool = false
+}
+
+/// One auto-detected topic chapter of a recording: a start time, a short title, and
+/// a one-line summary. Regenerable from the transcript; used to navigate long
+/// recordings (tap → seek audio + scroll transcript).
+struct ChapterMark: Codable, Hashable, Identifiable {
+    var id: UUID = UUID()
+    var start: Double   // seconds from the start of the recording
+    var title: String
+    var summary: String
 }
 
 @Model

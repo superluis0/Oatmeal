@@ -17,6 +17,11 @@ enum RecipeProvider {
             isEmail: true
         ),
         RecipeItem(
+            name: "Thank-you note",
+            prompt: "Draft a brief, warm, professional thank-you note to send after this meeting — well suited to following up after an interview. Reference one or two specific things that were actually discussed so it feels genuine, reaffirm interest and any next steps, and keep it to a few sentences. Put the subject on the first line prefixed exactly with 'Subject: '. Then a blank line, then the note.",
+            isEmail: true
+        ),
+        RecipeItem(
             name: "Key decisions",
             prompt: "List the key decisions made in this meeting as concise bullet points. If none, say so."
         ),

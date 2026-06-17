@@ -71,6 +71,10 @@ echo "▸ Installing to $DEST_DIR…"
 mkdir -p "$DEST_DIR"
 rm -rf "$APP_DEST"
 cp -R "$APP_SRC" "$APP_DEST"
+# Embed the MCP helper in the bundle (the canonical path Settings shows, stable
+# across Sparkle updates) AND keep the legacy ~/Applications copy for back-compat
+# with any existing agent config. The --deep sign below covers the bundled one.
+[ -f "$MCP_SRC" ] && cp -f "$MCP_SRC" "$APP_DEST/Contents/MacOS/oatmeal-mcp"
 [ -f "$MCP_SRC" ] && cp -f "$MCP_SRC" "$DEST_DIR/oatmeal-mcp"
 
 echo "▸ Cleaning quarantine + signing with stable identity…"

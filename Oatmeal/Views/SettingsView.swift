@@ -35,6 +35,7 @@ struct SettingsView: View {
     @State private var shortcutsEnabled: Bool = AppSettings.shortcutsEnabled
     @State private var globalHotkeysEnabled: Bool = AppSettings.globalHotkeysEnabled
     @State private var mcpWriteEnabled: Bool = AppSettings.mcpWriteEnabled
+    @State private var copiedMCP = false
     @Query private var allMeetings: [Meeting]
 
     var body: some View {
@@ -45,7 +46,7 @@ struct SettingsView: View {
                 TextField("Your role / company (optional)", text: $userTagline, prompt: Text("e.g. PM at Acme"))
                     .onChange(of: userTagline) { _, new in AppSettings.userTagline = new }
                 Text("Used so summaries and chat know which speaker is you (\u{201C}Me\u{201D}) and never mix you up with the other participants. Stored locally.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(helpFont).foregroundStyle(.secondary)
             }
             Section("Appearance") {
                 Picker("Theme", selection: $appearance.colorSchemePreference) {
@@ -63,7 +64,7 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
                 .onChange(of: appearance.textSize) { _, _ in appearance.save() }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Accent").font(.caption).foregroundStyle(.secondary)
+                    Text("Accent").font(helpFont).foregroundStyle(.secondary)
                     HStack(spacing: 12) {
                         ForEach(AccentChoice.allCases) { choice in
                             Circle()
@@ -92,7 +93,7 @@ struct SettingsView: View {
 
             Section("Record button") {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Border color").font(.caption).foregroundStyle(.secondary)
+                    Text("Border color").font(helpFont).foregroundStyle(.secondary)
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 36), spacing: 10)], spacing: 10) {
                         // Match the current accent.
                         borderSwatch(style: appearance.accent.gradient,
@@ -119,14 +120,14 @@ struct SettingsView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Preview").font(.caption).foregroundStyle(.secondary)
+                    Text("Preview").font(helpFont).foregroundStyle(.secondary)
                     HStack(spacing: 12) {
                         recordPreview(label: "New Recording", icon: "record.circle.fill", recording: false)
                         recordPreview(label: "Stop Recording", icon: "stop.fill", recording: true)
                     }
                 }
                 Text("The border traces your chosen color around the record button, and animates while a recording is in progress.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -136,7 +137,7 @@ struct SettingsView: View {
                 TextField("Model (optional)", text: $model, prompt: Text("Auto-select first loaded model"))
                     .onChange(of: model) { _, new in AppSettings.model = new }
                 Text("Oatmeal sends meeting transcripts to a local LM Studio server for summarization. Start LM Studio and load a model before recording.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -160,7 +161,7 @@ struct SettingsView: View {
                         }
                     }
                 Text("Adds open action items to an \u{201C}Oatmeal\u{201D} list in Reminders. Completing a task here completes it there too.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -170,7 +171,7 @@ struct SettingsView: View {
                 Toggle("Suggest answers while I'm recording", isOn: $liveAssist)
                     .onChange(of: liveAssist) { _, new in AppSettings.liveAssistEnabled = new }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("About you").font(.caption).foregroundStyle(.secondary)
+                    Text("About you").font(helpFont).foregroundStyle(.secondary)
                     TextEditor(text: $assistProfile)
                         .font(.system(.body))
                         .frame(height: 80)
@@ -180,7 +181,7 @@ struct SettingsView: View {
                         .onChange(of: assistProfile) { _, new in AppSettings.assistProfile = new }
                 }
                 Text("During a recording, Oatmeal can privately suggest answers and smart follow-up questions when you're asked something. Add your role/background above to personalize them. Everything runs on-device.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -188,7 +189,7 @@ struct SettingsView: View {
                 KeyboardShortcuts.Recorder("Start / stop recording", name: .toggleRecording)
                 KeyboardShortcuts.Recorder("Bookmark a moment", name: .markMoment)
                 Text("Global hotkeys work from any app — start a recording without leaving your meeting.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
                 Divider()
                 ForEach([
@@ -209,7 +210,7 @@ struct SettingsView: View {
                     }
                 }
                 Text("Tip: press ⌘K to jump to any meeting or run any command.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -220,9 +221,9 @@ struct SettingsView: View {
                 }
                 .onChange(of: inputDeviceUID) { _, new in AppSettings.inputDeviceUID = new }
                 Button("Refresh devices") { inputDevices = AudioDevices.inputDevices() }
-                    .font(.caption)
+                    .font(helpFont)
                 Text("Pick the mic that captures your voice. Don't choose a loopback device like BlackHole here — meeting audio (other people) is captured automatically via Screen Recording, so the mic should be your actual microphone.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -239,13 +240,13 @@ struct SettingsView: View {
                 .onChange(of: modelVersion) { _, new in AppSettings.modelVersion = new }
                 Toggle("In-person mode (diarize my mic into multiple speakers)", isOn: $inPersonMode)
                 Text("Engine changes apply to your next recording. Nemotron is NVIDIA's new streaming model: it runs fully on-device (Apple Silicon), downloads ~0.5 GB on first use, and if it can't start, the recording continues on Parakeet. The final transcript is always polished by the proven pipeline. In-person mode is for meetings where everyone shares your Mac's mic — also switchable right under the record button.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
             Section("Privacy") {
                 Label("Everything runs on your Mac. Transcription and AI happen locally — your meetings are never uploaded.", systemImage: "lock.shield.fill")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
                 LabeledContent("Meetings stored", value: "\(allMeetings.count)")
                 LabeledContent("Outbound network") {
@@ -261,7 +262,7 @@ struct SettingsView: View {
                     NSPasteboard.general.setString(Log.diagnosticsSummary(), forType: .string)
                 }
                 Text("Logs are breadcrumbs of what Oatmeal did — never your audio, transcripts, or notes. Open them to check on a recording, or copy a report when something needs a closer look.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
                 Button("Back up meetings now") {
                     StoreBackup.snapshot(context: modelContext)
@@ -269,10 +270,10 @@ struct SettingsView: View {
                 }
                 if backupConfirmed {
                     Label("Backup written.", systemImage: "checkmark.circle.fill")
-                        .font(.caption).foregroundStyle(Theme.accent)
+                        .font(helpFont).foregroundStyle(Theme.accent)
                 }
                 Text("Oatmeal backs up automatically and restores your meetings if the database is ever reset.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -290,7 +291,7 @@ struct SettingsView: View {
                     audioSize = StorageManager.formattedAudioSize()
                 }
                 Text("Transcripts, notes, and summaries are always kept — only the audio files are removed.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -303,7 +304,7 @@ struct SettingsView: View {
                 Toggle("Suggest recording when a meeting starts", isOn: $autoDetect)
                     .onChange(of: autoDetect) { _, new in AppSettings.autoDetectMeetings = new }
                 Text("When on, Oatmeal watches for a video-call app running alongside a live calendar event and offers to start recording.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -311,7 +312,7 @@ struct SettingsView: View {
                 TextField("Webhook URL", text: $webhookURL, prompt: Text("https://hooks.slack.com/…"))
                     .onChange(of: webhookURL) { _, new in AppSettings.webhookURL = new }
                 Text("When set, Oatmeal POSTs each finished meeting's summary + action items to this URL (Slack-compatible). Leave empty to keep everything local.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -319,8 +320,23 @@ struct SettingsView: View {
                 Toggle("Shortcuts, Spotlight & Siri", isOn: $shortcutsEnabled)
                     .onChange(of: shortcutsEnabled) { _, new in AppSettings.shortcutsEnabled = new }
                 Text("Drive Oatmeal from the macOS Shortcuts app, Spotlight, and Siri — ask across your meetings, summarize the last one, list action items, find a meeting, or start recording. Runs on-device; nothing leaves your Mac.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
+                if shortcutsEnabled {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Try saying to Siri, or typing in Spotlight (⌘-Space):")
+                            .font(microFont).foregroundStyle(.secondary)
+                        ForEach([
+                            "“Summarize my last meeting in Oatmeal”",
+                            "“My action items in Oatmeal”",
+                            "“Ask Oatmeal” — then your question",
+                            "“Start recording in Oatmeal”",
+                        ], id: \.self) {
+                            Text($0).font(microFont.monospaced()).foregroundStyle(Theme.textSecondary)
+                        }
+                    }
+                    .padding(.leading, 4)
+                }
 
                 Divider()
 
@@ -329,9 +345,12 @@ struct SettingsView: View {
                 if globalHotkeysEnabled {
                     KeyboardShortcuts.Recorder("Quick-ask anywhere", name: .quickAsk)
                     KeyboardShortcuts.Recorder("Paste last recap into the front app", name: .copyRecap)
+                    Button("Open Accessibility Settings…") { openAccessibilitySettings() }
+                        .font(helpFont)
+                        .padding(.leading, 4)
                 }
-                Text("Quick-ask opens a floating box to ask across your meetings from any app. Paste-recap drops your last meeting's recap into whatever you're typing in — grant Accessibility to auto-paste, otherwise it's copied to the clipboard.")
-                    .font(.caption)
+                Text("Quick-ask (default ⌥⌘A) opens a floating box to ask across your meetings from any app. Paste-recap (default ⌥⌘V) drops your last meeting's recap into whatever you're typing — grant Accessibility to auto-paste, otherwise it's copied so you can press ⌘V yourself. ⌥⌘V clashes with “Paste and Match Style” in some apps; rebind above if needed.")
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
 
                 Divider()
@@ -341,9 +360,32 @@ struct SettingsView: View {
                         AppSettings.mcpWriteEnabled = new
                         MCPCommandInbox.shared.setEnabled(new)
                     }
-                Text("The local MCP server already lets AI agents (like Claude) read your meetings on-device. Turn this on to also let them make guarded writes — e.g. append a note to a meeting. Off by default; reads are always available.")
-                    .font(.caption)
+                Text("Oatmeal ships a local MCP server so AI agents (like Claude) can read your meetings on-device. Reads are always available; turn this on to also allow guarded writes — e.g. appending a note to a meeting.")
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
+
+                DisclosureGroup("Connect your agent (Claude)") {
+                    VStack(alignment: .leading, spacing: Theme.Space.sm) {
+                        Text("Claude Code — run once in Terminal:")
+                            .font(helpFont).foregroundStyle(.secondary)
+                        codeBlock(mcpAddCommand)
+                        HStack(spacing: Theme.Space.md) {
+                            Button(copiedMCP ? "Copied ✓" : "Copy command") { copyMCPCommand() }
+                            Button("Reveal server in Finder") { revealMCPBinary() }
+                        }
+                        .font(helpFont)
+
+                        Text("Claude Desktop — add to claude_desktop_config.json, then restart Claude:")
+                            .font(helpFont).foregroundStyle(.secondary)
+                            .padding(.top, 2)
+                        codeBlock(mcpDesktopJSON)
+
+                        Text("Once connected, ask your agent things like “what are my open action items?” or “summarize my meeting with Laura.”")
+                            .font(microFont).foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                }
+                .font(.callout)
             }
 
             Section("Updates") {
@@ -370,19 +412,20 @@ struct SettingsView: View {
                         }
                         .disabled(updateChecker.isChecking)
                         Spacer()
-                        Text("You're up to date").font(.caption).foregroundStyle(.secondary)
+                        Text("You're up to date").font(helpFont).foregroundStyle(.secondary)
                     }
                 }
                 Text("Checks the Oatmeal release feed over HTTPS for a newer version and can install it in one click. No data about you is sent. Turn off to keep Oatmeal fully offline.")
-                    .font(.caption)
+                    .font(helpFont)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .font(baseFont)
         .fontDesign(Appearance.shared.fontDesign)
         .dynamicTypeSize(Appearance.shared.dynamicTypeSize)
         .tint(Theme.accent)
-        .frame(width: 500, height: 560)
+        .frame(width: 560, height: 600)
         .navigationTitle("Settings")
     }
 
@@ -436,4 +479,55 @@ struct SettingsView: View {
             .contentShape(Circle())
             .onTapGesture(perform: action)
     }
+
+    // MARK: - MCP connection helpers
+
+    /// Path to the bundled MCP server (canonical, stable across Sparkle updates),
+    /// falling back to the legacy ~/Applications copy if the bundle one isn't there.
+    private var mcpBinaryPath: String {
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/oatmeal-mcp").path
+        if FileManager.default.fileExists(atPath: bundled) { return bundled }
+        let legacy = (NSHomeDirectory() as NSString).appendingPathComponent("Applications/oatmeal-mcp")
+        return FileManager.default.fileExists(atPath: legacy) ? legacy : bundled
+    }
+    private var mcpAddCommand: String { "claude mcp add oatmeal \"\(mcpBinaryPath)\"" }
+    private var mcpDesktopJSON: String {
+        "{\n  \"mcpServers\": {\n    \"oatmeal\": { \"command\": \"\(mcpBinaryPath)\" }\n  }\n}"
+    }
+
+    /// A selectable monospaced code block for copyable setup snippets.
+    private func codeBlock(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.monospaced())
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+
+    private func copyMCPCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(mcpAddCommand, forType: .string)
+        copiedMCP = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { copiedMCP = false }
+    }
+    private func revealMCPBinary() {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: mcpBinaryPath)])
+    }
+    private func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    // MARK: - Scaled fonts
+
+    // Dynamic Type alone doesn't reliably resize Form text on macOS (see
+    // Appearance.fontScale), so the Settings pane drives its own sizing off the
+    // explicit multiplier — honoring the Text Size setting like the rest of the app.
+    // Reading `appearance.fontScale` in body (via these) keeps it live.
+    private var baseFont: Font { .system(size: 13 * appearance.fontScale) }
+    private var helpFont: Font { .system(size: 12 * appearance.fontScale) }
+    private var microFont: Font { .system(size: 11 * appearance.fontScale) }
 }

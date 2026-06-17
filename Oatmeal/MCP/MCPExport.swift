@@ -15,6 +15,17 @@ enum MCPExport {
         let descriptor = FetchDescriptor<Meeting>(sortBy: [SortDescriptor(\.date, order: .reverse)])
         let meetings = (try? context.fetch(descriptor)) ?? []
         write(meetings)
+        lastSyncAt = .now
+    }
+
+    private static var lastSyncAt: Date?
+
+    /// Coalesced sync for frequent triggers (launch, app-switch) so the agent mirror
+    /// stays current with in-app edits without re-serializing on every rapid app
+    /// switch. The explicit `sync` (post-recording / post-write) bypasses the throttle.
+    static func syncIfNeeded(context: ModelContext, minInterval: TimeInterval = 3) {
+        if let last = lastSyncAt, Date.now.timeIntervalSince(last) < minInterval { return }
+        sync(context: context)
     }
 
     private static func write(_ meetings: [Meeting]) {

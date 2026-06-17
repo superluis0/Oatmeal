@@ -13,17 +13,20 @@ struct PeopleView: View {
         let name: String
         let email: String?
         var meetingIDs: [PersistentIdentifier]
+        var lastMet: Date?
         static func == (l: Person, r: Person) -> Bool { l.id == r.id }
         func hash(into h: inout Hasher) { h.combine(id) }
     }
 
     private var people: [Person] {
         var map: [String: Person] = [:]
+        // `meetings` is sorted newest-first, so the first time we see a person is
+        // their most recent meeting — capture it as `lastMet`.
         for m in meetings {
             for a in m.liveAttendees {
                 let key = a.name.lowercased()
                 if map[key] == nil {
-                    map[key] = Person(id: key, name: a.name, email: a.email, meetingIDs: [])
+                    map[key] = Person(id: key, name: a.name, email: a.email, meetingIDs: [], lastMet: m.date)
                 }
                 map[key]?.meetingIDs.append(m.persistentModelID)
             }
@@ -58,7 +61,14 @@ struct PeopleView: View {
                                     }
                                 }
                                 Spacer()
-                                Text("\(person.meetingIDs.count)").font(.caption).foregroundStyle(Theme.textSecondary)
+                                VStack(alignment: .trailing, spacing: 1) {
+                                    Text("\(person.meetingIDs.count) \(person.meetingIDs.count == 1 ? "meeting" : "meetings")")
+                                        .font(.caption).foregroundStyle(Theme.textSecondary)
+                                    if let last = person.lastMet {
+                                        Text("last \(last.formatted(.dateTime.month().day()))")
+                                            .font(.caption2).foregroundStyle(Theme.textTertiary)
+                                    }
+                                }
                             }
                             .padding(.vertical, 2)
                         }
@@ -104,6 +114,7 @@ struct PersonPage: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.lg) {
                 header(meetings, commitments)
+                topicsSection(meetings)
                 if !commitments.isEmpty { commitmentsSection(commitments) }
                 meetingsSection(meetings)
             }
@@ -139,6 +150,39 @@ struct PersonPage: View {
         }
         .frame(maxWidth: .infinity)
         .oatCard(padding: Theme.Space.sm)
+    }
+
+    /// The topics you keep coming back to with this person — the most common tags
+    /// across your shared meetings. On-device, no LLM.
+    @ViewBuilder
+    private func topicsSection(_ meetings: [Meeting]) -> some View {
+        let topics = recurringTopics(in: meetings)
+        if !topics.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                SectionLabel(text: "Recurring topics")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(topics, id: \.name) { t in
+                            Text("#\(t.name)" + (t.count > 1 ? " ×\(t.count)" : ""))
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(Theme.accentSoft, in: Capsule())
+                                .foregroundStyle(Theme.accent)
+                        }
+                    }
+                    .padding(.horizontal, 1)
+                }
+            }
+        }
+    }
+
+    private func recurringTopics(in meetings: [Meeting]) -> [(name: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for m in meetings { for tag in m.tags { counts[tag, default: 0] += 1 } }
+        return counts
+            .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .prefix(10)
+            .map { (name: $0.key, count: $0.value) }
     }
 
     private func commitmentsSection(_ commitments: [ActionItem]) -> some View {

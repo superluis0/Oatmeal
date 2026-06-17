@@ -43,6 +43,18 @@ xcodebuild -project Oatmeal.xcodeproj -scheme Oatmeal -configuration Release \
   -destination 'platform=macOS' -derivedDataPath "$BUILD_DIR" \
   ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build >/dev/null
 
+# Build the MCP server (universal) and embed it in the app bundle so the agent
+# integration ships with the release and survives Sparkle updates — the bundle is
+# replaced in place, so the path next to the app stays valid. Reads the read-only
+# JSON mirror; needs no special entitlements.
+echo "▸ Building + embedding MCP server (universal)…"
+xcodebuild -project Oatmeal.xcodeproj -scheme OatmealMCP -configuration Release \
+  -destination 'platform=macOS' -derivedDataPath "$BUILD_DIR" \
+  ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build >/dev/null
+MCP_BIN="$BUILD_DIR/Build/Products/Release/oatmeal-mcp"
+[ -f "$MCP_BIN" ] || { echo "✗ oatmeal-mcp was not built"; exit 1; }
+cp -f "$MCP_BIN" "$APP_SRC/Contents/MacOS/oatmeal-mcp"
+
 # Locate Sparkle's CLI tools from the resolved package artifacts.
 SPARKLE_BIN="$(find "$BUILD_DIR/SourcePackages/artifacts" -type d -name bin -path '*Sparkle*' 2>/dev/null | head -1)"
 [ -n "$SPARKLE_BIN" ] || { echo "✗ Sparkle tools not found under $BUILD_DIR"; exit 1; }
@@ -61,6 +73,10 @@ if [ -d "$FW" ]; then
   done
   codesign --force --sign "$SIGN_IDENTITY" "$FW" >/dev/null
 fi
+# Sign the embedded MCP helper before sealing the app, so the strict --deep verify
+# below (and Gatekeeper) accepts the bundle.
+[ -f "$APP_SRC/Contents/MacOS/oatmeal-mcp" ] && \
+  codesign --force --sign "$SIGN_IDENTITY" "$APP_SRC/Contents/MacOS/oatmeal-mcp" >/dev/null
 codesign --force --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" "$APP_SRC" >/dev/null
 codesign --verify --strict --deep "$APP_SRC" \
   && echo "  signature OK ($(codesign -dvvv "$APP_SRC" 2>&1 | grep -o 'Authority=.*' | head -1))"

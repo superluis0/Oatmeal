@@ -62,6 +62,16 @@ struct SemanticIndex {
         return best.sorted { $0.value > $1.value }.prefix(limit).map { $0.key }
     }
 
+    /// The single transcript chunk in `meetingID` that best matches `query`, for
+    /// jump-to-moment. The returned text is verbatim transcript, so the caller can
+    /// map it back to a segment (and its start time). nil if unavailable.
+    func bestTranscriptSnippet(for query: String, meetingID: UUID) -> String? {
+        guard let q = vector(for: query) else { return nil }
+        let chunks = (try? context.fetch(FetchDescriptor<EmbeddingChunk>(
+            predicate: #Predicate { $0.meetingID == meetingID && $0.kind == "transcript" }))) ?? []
+        return chunks.map { ($0.text, cosine(q, $0.vector)) }.max { $0.1 < $1.1 }?.0
+    }
+
     // MARK: - Helpers
 
     private func chunks(_ text: String, maxChars: Int = 400) -> [String] {

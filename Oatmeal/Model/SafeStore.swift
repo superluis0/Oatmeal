@@ -42,12 +42,38 @@ enum SafeStore {
             let ns = swiftError as NSError
             if ns.code == 256 || ns.userInfo["NSSQLiteErrorDomain"] != nil
                 || (134_000...134_999).contains(ns.code) {
-                Log.error("store appears unreadable (\(context_label)) — prompting restart", "store")
+                // Log on-disk diagnostics ONCE (first failure) so a crash report tells
+                // us WHY the SQLite file couldn't be opened — missing, locked, huge, or
+                // out of disk — instead of us guessing from a bare error code.
+                if !StoreHealth.shared.degraded {
+                    Log.error("store appears unreadable (\(context_label)) — \(storeDiagnostics()) — prompting restart", "store")
+                }
                 StoreHealth.shared.degraded = true
             }
             return false
         }
         return true
+    }
+
+    /// On-disk facts about the SwiftData store, for diagnosing store-level failures:
+    /// where it lives, whether each file exists + its size, and free disk space.
+    private static func storeDiagnostics() -> String {
+        let fm = FileManager.default
+        guard let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return "appSupport=unavailable"
+        }
+        func info(_ name: String) -> String {
+            let url = dir.appendingPathComponent(name)
+            guard fm.fileExists(atPath: url.path) else { return "\(name):missing" }
+            let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int ?? -1
+            return "\(name):\(size)B"
+        }
+        var free = "?"
+        if let vals = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+           let bytes = vals.volumeAvailableCapacityForImportantUsage {
+            free = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
+        return "dir=\(dir.path) [\(info("default.store")), \(info("default.store-wal")), \(info("default.store-shm"))] freeDisk=\(free)"
     }
 
     private static var pendingSave: Task<Void, Never>?

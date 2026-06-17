@@ -183,6 +183,12 @@ struct OatmealApp: App {
 
         // Watch the MCP command inbox for guarded agent writes (no-op unless enabled).
         MCPCommandInbox.shared.start(context: container.mainContext)
+
+        // Refresh the agent read-mirror at launch so an MCP client (Claude, etc.) sees
+        // data current with edits made in a previous session — not just the last
+        // recording. AppDelegate also refreshes it when Oatmeal loses focus (i.e. when
+        // you switch over to your agent).
+        Task(priority: .utility) { @MainActor in MCPExport.syncIfNeeded(context: container.mainContext) }
     }
 }
 
@@ -272,6 +278,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             return .terminateNow
+        }
+    }
+
+    /// Refresh the agent read-mirror whenever Oatmeal loses focus — typically right
+    /// before the user switches to their MCP client — so it reflects this session's
+    /// edits. Throttled, so rapid app-switching doesn't re-serialize repeatedly.
+    func applicationDidResignActive(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            guard let ctx = AppLifecycle.shared.context else { return }
+            MCPExport.syncIfNeeded(context: ctx)
         }
     }
 }

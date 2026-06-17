@@ -238,6 +238,7 @@ struct MeetingDetailContainer: View {
     var onConsumedAutoWrapUp: () -> Void
     var onDelete: (Meeting) -> Void
     var onOpenMeeting: (Meeting) -> Void
+    var momentQuery: String = ""
 
     @Query private var allMeetings: [Meeting]
 
@@ -249,7 +250,8 @@ struct MeetingDetailContainer: View {
                 autoWrapUp: meeting.id == justRecordedID,
                 onConsumedAutoWrapUp: onConsumedAutoWrapUp,
                 onDelete: { onDelete(meeting) },
-                onOpenMeeting: onOpenMeeting)
+                onOpenMeeting: onOpenMeeting,
+                momentQuery: momentQuery)
             .id(meetingID)
         } else {
             OatEmptyState(
@@ -267,6 +269,9 @@ struct MeetingDetailView: View {
     var onConsumedAutoWrapUp: () -> Void = {}
     var onDelete: () -> Void = {}
     var onOpenMeeting: (Meeting) -> Void = { _ in }
+    /// When opened from a semantic search, the query — used to auto-jump to the
+    /// best-matching transcript moment on appear.
+    var momentQuery: String = ""
     @Environment(\.modelContext) private var context
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query(sort: \Meeting.date, order: .reverse) private var allMeetings: [Meeting]
@@ -299,6 +304,8 @@ struct MeetingDetailView: View {
     @State private var showDeleteConfirm = false
     @State private var showReprocessConfirm = false
     @State private var jumpTarget: PersistentIdentifier?
+    @State private var generatingChapters = false
+    @State private var chaptersError: String?
     @State private var showFollowUpSheet = false
     @State private var followUpDate = Date().addingTimeInterval(7 * 86_400)
     @State private var followUpToast: String?
@@ -341,6 +348,108 @@ struct MeetingDetailView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             if jumpTarget == ref.id { jumpTarget = nil }
         }
+    }
+
+    // MARK: - Chapters
+
+    /// Topic chapters for navigating the recording. A button when none exist yet,
+    /// the tappable list once generated.
+    @ViewBuilder
+    private var chaptersSection: some View {
+        if !meeting.chapters.isEmpty {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(meeting.chapters) { ch in
+                        Button { jumpToChapter(ch) } label: {
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(timeString(ch.start))
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(Theme.accent)
+                                    .frame(width: 46, alignment: .leading)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(ch.title)
+                                        .font(.callout.weight(.semibold))
+                                        .foregroundStyle(Theme.textPrimary)
+                                    if !ch.summary.isEmpty {
+                                        Text(ch.summary)
+                                            .font(.caption)
+                                            .foregroundStyle(Theme.textSecondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Button { Task { await generateChapters() } } label: {
+                        Label(generatingChapters ? "Regenerating…" : "Regenerate", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(generatingChapters)
+                    .padding(.top, 2)
+                }
+                .padding(.top, 4)
+            } label: {
+                Label("Chapters", systemImage: "list.bullet.indent").font(.subheadline.weight(.semibold))
+            }
+        } else if !meeting.segments.isEmpty {
+            Button { Task { await generateChapters() } } label: {
+                HStack(spacing: 6) {
+                    if generatingChapters { ProgressView().controlSize(.small) }
+                    Label(generatingChapters ? "Finding chapters…" : "Generate chapters",
+                          systemImage: "list.bullet.indent")
+                }
+            }
+            .buttonStyle(OatGhostButton())
+            .disabled(generatingChapters)
+        }
+        if let chaptersError {
+            Text(chaptersError).font(.caption).foregroundStyle(Theme.danger)
+        }
+    }
+
+    /// Speaker-labeled transcript with each line timestamped `[M:SS]` — the input the
+    /// chapter model needs to place chapter start times.
+    private func timestampedTranscript() -> String {
+        meeting.orderedSegments
+            .map { "[\(timeString($0.start))] \(meeting.displayName(for: $0.speaker)): \($0.text)" }
+            .joined(separator: "\n")
+    }
+
+    private func generateChapters() async {
+        guard !generatingChapters, !meeting.segments.isEmpty else { return }
+        generatingChapters = true
+        chaptersError = nil
+        defer { generatingChapters = false }
+        // Capture the transcript up front; re-fetch the meeting after the await rather
+        // than mutating the captured handle (slow local model → stale-handle crash class).
+        let transcript = timestampedTranscript()
+        let id = meeting.id
+        do {
+            let marks = try await ChapterService().chapters(timestamped: transcript)
+            var fd = FetchDescriptor<Meeting>(predicate: #Predicate { $0.id == id })
+            fd.fetchLimit = 1
+            guard let live = try? context.fetch(fd).first, !live.isDeleted, live.modelContext != nil else { return }
+            live.chapters = marks
+            if marks.isEmpty { chaptersError = "Couldn't find clear chapters in this meeting." }
+            SafeStore.save(context, "chapters")
+        } catch {
+            chaptersError = "Couldn't generate chapters — is LM Studio running?"
+        }
+    }
+
+    private func jumpToChapter(_ ch: ChapterMark) {
+        guard let seg = nearestSegment(to: ch.start) else { return }
+        jump(to: SegmentRef(id: seg.persistentModelID, speaker: seg.speaker, text: seg.text, start: ch.start))
+    }
+
+    /// The transcript segment that starts at or just before `time` (where to scroll).
+    private func nearestSegment(to time: Double) -> TranscriptSegment? {
+        let ordered = meeting.orderedSegments
+        return ordered.last { $0.start <= time + 0.05 } ?? ordered.first
     }
 
     var body: some View {
@@ -412,7 +521,9 @@ struct MeetingDetailView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    Button("Copy as Markdown") { MarkdownExporter.copyToPasteboard(meeting) }
+                    Button("Copy recap (no transcript)") { MarkdownExporter.copyRecap(meeting) }
+                    Button("Copy full notes (with transcript)") { MarkdownExporter.copyToPasteboard(meeting) }
+                    Divider()
                     Button("Export Markdown…") { MarkdownExporter.exportToFile(meeting) }
                     Button("Export PDF…") { MarkdownExporter.exportPDF(meeting) }
                 } label: {
@@ -537,7 +648,7 @@ struct MeetingDetailView: View {
         .sheet(isPresented: $showTemplateEditor) {
             TemplateEditorView()
         }
-        .onAppear { loadAudioIfNeeded() }
+        .onAppear { loadAudioIfNeeded(); jumpToBestMoment() }
         .onChange(of: meeting.audioPath) { _, _ in loadAudioIfNeeded() }
         .onChange(of: jumpTarget) { _, target in
             guard let target else { return }
@@ -564,6 +675,26 @@ struct MeetingDetailView: View {
         .id(tab)
         .transition(reduceMotion ? .identity : .opacity)
         .animation(Motion.reveal(reduceMotion), value: tab)
+    }
+
+    /// When this meeting was opened from a semantic search, scroll the transcript to
+    /// (and play from) the moment that best matches the query. Fully on-device.
+    private func jumpToBestMoment() {
+        let query = momentQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty, SemanticIndex.isAvailable, !meeting.segments.isEmpty else { return }
+        guard let snippet = SemanticIndex(context: context).bestTranscriptSnippet(for: query, meetingID: meeting.id)
+        else { return }
+        let ordered = meeting.orderedSegments
+        // The snippet is verbatim transcript; find the first non-trivial segment it
+        // contains (prefer longer text so we don't land on filler like "Yeah.").
+        guard let seg = ordered.first(where: { $0.text.count > 12 && snippet.contains($0.text) })
+                ?? ordered.first(where: { !$0.text.isEmpty && snippet.contains($0.text) })
+        else { return }
+        // Defer so the transcript can render before we scroll to it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            guard meeting.isAlive else { return }
+            jump(to: SegmentRef(id: seg.persistentModelID, speaker: seg.speaker, text: seg.text, start: seg.start))
+        }
     }
 
     private func loadAudioIfNeeded() {
@@ -1097,10 +1228,10 @@ struct MeetingDetailView: View {
         } else {
             GroupBox {
                 LazyVStack(alignment: .leading, spacing: 12) {
+                    if meeting.audioPath != nil && player.duration > 0 {
+                        playerBar
+                    }
                     HStack {
-                        if meeting.audioPath != nil && player.duration > 0 {
-                            playerBar
-                        }
                         Spacer()
                         Toggle(isOn: $editingTranscript) {
                             Label("Edit", systemImage: "pencil")
@@ -1108,6 +1239,7 @@ struct MeetingDetailView: View {
                         .toggleStyle(.button)
                         .controlSize(.small)
                     }
+                    chaptersSection
                     if editingTranscript {
                         speakerRenameEditor
                         Divider()
@@ -1160,22 +1292,59 @@ struct MeetingDetailView: View {
     }
 
     private var playerBar: some View {
-        HStack(spacing: 8) {
-            Button {
-                player.togglePlay()
-            } label: {
-                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.title2)
+        HStack(spacing: Theme.Space.sm) {
+            // Stop — halt and return to the start.
+            Button { player.stop() } label: {
+                Image(systemName: "stop.fill")
             }
             .buttonStyle(.plain)
+            .foregroundStyle(Theme.textSecondary)
+            .help("Stop")
+            .disabled(!player.isPlaying && player.currentTime == 0)
+
+            // Rewind 15 seconds.
+            Button { player.skip(by: -15) } label: {
+                Image(systemName: "gobackward.15").font(.title3)
+            }
+            .buttonStyle(.plain)
+            .help("Back 15 seconds")
+
+            // Play / Pause.
+            Button { player.togglePlay() } label: {
+                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            .help(player.isPlaying ? "Pause" : "Play")
+
+            // Forward 15 seconds.
+            Button { player.skip(by: 15) } label: {
+                Image(systemName: "goforward.15").font(.title3)
+            }
+            .buttonStyle(.plain)
+            .help("Forward 15 seconds")
+
+            // Playback speed (cycles 1× → 1.25× → 1.5× → 2×).
+            Button { player.cycleSpeed() } label: {
+                Text(String(format: "%g\u{00D7}", Double(player.rate)))
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .frame(minWidth: 26)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Playback speed")
+
+            // Scrubber.
             Slider(
                 value: Binding(get: { player.currentTime }, set: { player.seek(to: $0) }),
                 in: 0...max(player.duration, 0.1)
             )
-            .frame(maxWidth: 200)
+
             Text("\(timeString(player.currentTime)) / \(timeString(player.duration))")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .fixedSize()
         }
     }
 

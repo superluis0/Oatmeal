@@ -156,7 +156,8 @@ struct ContentView: View {
                     justRecordedID: justRecordedID,
                     onConsumedAutoWrapUp: { justRecordedID = nil },
                     onDelete: { requestDelete($0) },
-                    onOpenMeeting: { selection = $0 })
+                    onOpenMeeting: { selection = $0 },
+                    momentQuery: searchMode == .semantic ? debouncedSearch : "")
             } else {
                 OatEmptyState(
                     icon: "waveform",
@@ -302,7 +303,7 @@ struct ContentView: View {
             }
         }
         .sheet(item: $whatsNew) { info in
-            WhatsNewSheet(version: info.version, bullets: info.bullets) { whatsNew = nil }
+            WhatsNewSheet(currentVersion: info.version) { whatsNew = nil }
         }
         .sheet(isPresented: $showPalette) {
             CommandPaletteView(
@@ -373,8 +374,8 @@ struct ContentView: View {
         let prior = AppSettings.lastSeenVersion
         if !v.isEmpty { AppSettings.lastSeenVersion = v }
         guard !prior.isEmpty, prior != v, AppSettings.hasOnboarded,
-              let bullets = WhatsNew.bullets(for: v) else { return }
-        whatsNew = WhatsNewInfo(version: v, bullets: bullets)
+              WhatsNew.hasEntry(for: v) else { return }
+        whatsNew = WhatsNewInfo(version: v)
     }
 
     private func toggleRecording() {

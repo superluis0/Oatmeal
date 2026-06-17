@@ -32,6 +32,14 @@ struct MeetingListView: View {
     @State private var showNewFolder = false
     @State private var newFolderName = ""
     @State private var folderTarget: Meeting?
+    @State private var renamingFolder: Folder?
+    @State private var renameText = ""
+    /// Folders the user has collapsed (default: expanded). Per-session.
+    @State private var collapsedFolders: Set<PersistentIdentifier> = []
+    @State private var unfiledExpanded = true
+    /// The folder currently hovered during a drag, for the drop highlight.
+    @State private var dropTargetFolder: PersistentIdentifier?
+    @State private var unfiledIsTarget = false
 
     /// Same key AppSettings.inPersonMode reads — @AppStorage keeps this control
     /// and the Settings-window toggle in sync live.
@@ -63,17 +71,29 @@ struct MeetingListView: View {
                     ForEach(meetings) { row($0) }
                         .onDelete { delete(at: $0, in: meetings) }
                 } else {
+                    // Show every folder (even empty ones) as a collapsible, drop-target
+                    // section so meetings can be dragged into a freshly-made folder.
                     ForEach(folders) { folder in
                         let items = meetings.filter { $0.folder?.persistentModelID == folder.persistentModelID }
-                        if !items.isEmpty {
-                            Section { ForEach(items) { row($0) } }
-                            header: { SectionLabel(text: folder.name) }
+                        Section(isExpanded: expandBinding(folder.persistentModelID)) {
+                            if items.isEmpty {
+                                Text("Drag meetings here")
+                                    .font(.system(size: Appearance.shared.scaled(11)))
+                                    .foregroundStyle(Theme.textSecondary)
+                            } else {
+                                ForEach(items) { row($0) }
+                            }
+                        } header: {
+                            folderHeader(folder, count: items.count)
                         }
                     }
                     let unfiled = meetings.filter { $0.folder == nil }
                     if !unfiled.isEmpty {
-                        Section { ForEach(unfiled) { row($0) } }
-                        header: { SectionLabel(text: "Unfiled") }
+                        Section(isExpanded: $unfiledExpanded) {
+                            ForEach(unfiled) { row($0) }
+                        } header: {
+                            unfiledHeader(count: unfiled.count)
+                        }
                     }
                 }
             }
@@ -105,9 +125,19 @@ struct MeetingListView: View {
         .toolbar {
             ToolbarItem {
                 Button {
+                    folderTarget = nil
+                    newFolderName = ""
+                    showNewFolder = true
+                } label: {
+                    Label("New Folder", systemImage: "folder.badge.plus")
+                }
+                .help("Create a folder to group meetings")
+            }
+            ToolbarItem {
+                Button {
                     MarkdownExporter.exportVault(meetings)
                 } label: {
-                    Label("Export All", systemImage: "folder.badge.plus")
+                    Label("Export All", systemImage: "square.and.arrow.up")
                 }
                 .help("Export all shown meetings to a Markdown folder")
                 .disabled(meetings.isEmpty)
@@ -117,6 +147,14 @@ struct MeetingListView: View {
             TextField("Folder name", text: $newFolderName)
             Button("Create") { createFolder() }
             Button("Cancel", role: .cancel) { newFolderName = "" }
+        }
+        .alert("Rename Folder", isPresented: Binding(
+            get: { renamingFolder != nil },
+            set: { if !$0 { renamingFolder = nil } }
+        )) {
+            TextField("Folder name", text: $renameText)
+            Button("Save") { renameFolder() }
+            Button("Cancel", role: .cancel) { renamingFolder = nil }
         }
     }
 
@@ -155,6 +193,9 @@ struct MeetingListView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .tag(meeting)
+        // `.draggable` (not `.onDrag`) so single-click selection still opens the row —
+        // `.onDrag` swallows the click inside a List(selection:) on macOS.
+        .draggable(meeting.id.uuidString)
         .contextMenu {
             Menu("Move to Folder") {
                 Button("None") { assign(meeting, to: nil) }
@@ -261,7 +302,9 @@ struct MeetingListView: View {
 
     private func assign(_ meeting: Meeting, to folder: Folder?) {
         meeting.folder = folder
-        try? context.save()
+        // Reveal where it landed if that folder was collapsed.
+        if let folder { collapsedFolders.remove(folder.persistentModelID) }
+        SafeStore.save(context, "folder-assign")
     }
 
     private func createFolder() {
@@ -274,7 +317,96 @@ struct MeetingListView: View {
             target.folder = folder
             folderTarget = nil
         }
-        try? context.save()
+        SafeStore.save(context, "folder-create")
+    }
+
+    private func renameFolder() {
+        guard let folder = renamingFolder else { return }
+        let name = renameText.trimmingCharacters(in: .whitespaces)
+        renamingFolder = nil
+        guard !name.isEmpty else { return }
+        folder.name = name
+        SafeStore.save(context, "folder-rename")
+    }
+
+    /// Deletes the folder only — its meetings keep their data and fall back to
+    /// "Unfiled" (the `Meeting.folder` relationship is `.nullify`).
+    private func deleteFolder(_ folder: Folder) {
+        context.delete(folder)
+        SafeStore.save(context, "folder-delete")
+    }
+
+    // MARK: - Folder UI helpers
+
+    private func expandBinding(_ id: PersistentIdentifier) -> Binding<Bool> {
+        Binding(
+            get: { !collapsedFolders.contains(id) },
+            set: { isOpen in
+                if isOpen { collapsedFolders.remove(id) } else { collapsedFolders.insert(id) }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func folderHeader(_ folder: Folder, count: Int) -> some View {
+        HStack(spacing: 6) {
+            SectionLabel(text: folder.name)
+            if count > 0 {
+                Text("\(count)")
+                    .font(.system(size: Appearance.shared.scaled(10), weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Theme.surface, in: Capsule())
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 2).padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                .fill(dropTargetFolder == folder.persistentModelID ? Theme.accentSoft : Color.clear)
+        )
+        .dropDestination(for: String.self) { ids, _ in
+            handleDropIDs(ids, to: folder)
+        } isTargeted: { hovering in
+            dropTargetFolder = hovering ? folder.persistentModelID : nil
+        }
+        .contextMenu {
+            Button("Rename\u{2026}") { renameText = folder.name; renamingFolder = folder }
+            Button("Delete Folder", role: .destructive) { deleteFolder(folder) }
+        }
+    }
+
+    @ViewBuilder
+    private func unfiledHeader(count: Int) -> some View {
+        HStack(spacing: 6) {
+            SectionLabel(text: "Unfiled")
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 2).padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                .fill(unfiledIsTarget ? Theme.accentSoft : Color.clear)
+        )
+        .dropDestination(for: String.self) { ids, _ in
+            handleDropIDs(ids, to: nil)
+        } isTargeted: { hovering in
+            unfiledIsTarget = hovering
+        }
+    }
+
+    /// (Re)assign the dropped meeting id(s) to `folder` (nil = Unfiled). `.draggable`
+    /// delivers the ids directly, so no async NSItemProvider loading is needed.
+    private func handleDropIDs(_ ids: [String], to folder: Folder?) -> Bool {
+        var assigned = false
+        for raw in ids {
+            guard let uuid = UUID(uuidString: raw),
+                  let meeting = meetings.first(where: { $0.id == uuid }) else { continue }
+            assign(meeting, to: folder)
+            assigned = true
+        }
+        return assigned
     }
 
     private func importAudio() {
