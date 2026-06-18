@@ -42,11 +42,13 @@ enum SafeStore {
             let ns = swiftError as NSError
             if ns.code == 256 || ns.userInfo["NSSQLiteErrorDomain"] != nil
                 || (134_000...134_999).contains(ns.code) {
-                // Log on-disk diagnostics ONCE (first failure) so a crash report tells
-                // us WHY the SQLite file couldn't be opened — missing, locked, huge, or
-                // out of disk — instead of us guessing from a bare error code.
+                // Log the underlying error chain + on-disk diagnostics ONCE (first
+                // failure) so a crash report tells us WHY the SQLite file couldn't be
+                // opened — the sqlite extended result code and any nested POSIX/OSStatus
+                // reason the bare Code 256 hides, plus whether the file is missing,
+                // locked, huge, or out of disk — instead of guessing.
                 if !StoreHealth.shared.degraded {
-                    Log.error("store appears unreadable (\(context_label)) — \(storeDiagnostics()) — prompting restart", "store")
+                    Log.error("store appears unreadable (\(context_label)) — \(errorDiagnostics(ns)) — \(storeDiagnostics()) — prompting restart", "store")
                 }
                 StoreHealth.shared.degraded = true
             }
@@ -57,23 +59,45 @@ enum SafeStore {
 
     /// On-disk facts about the SwiftData store, for diagnosing store-level failures:
     /// where it lives, whether each file exists + its size, and free disk space.
+    /// Reads the store location from the single source of truth (`StorageManager`),
+    /// so it tracks the namespaced relocation automatically.
     private static func storeDiagnostics() -> String {
         let fm = FileManager.default
-        guard let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            return "appSupport=unavailable"
-        }
-        func info(_ name: String) -> String {
-            let url = dir.appendingPathComponent(name)
-            guard fm.fileExists(atPath: url.path) else { return "\(name):missing" }
+        guard let store = StorageManager.storeURL() else { return "store=unavailable" }
+        let dir = store.deletingLastPathComponent()
+        let base = store.lastPathComponent
+        func info(_ suffix: String) -> String {
+            let url = dir.appendingPathComponent(base + suffix)
+            guard fm.fileExists(atPath: url.path) else { return "\(base + suffix):missing" }
             let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int ?? -1
-            return "\(name):\(size)B"
+            return "\(base + suffix):\(size)B"
         }
         var free = "?"
         if let vals = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
            let bytes = vals.volumeAvailableCapacityForImportantUsage {
             free = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
         }
-        return "dir=\(dir.path) [\(info("default.store")), \(info("default.store-wal")), \(info("default.store-shm"))] freeDisk=\(free)"
+        return "dir=\(dir.path) [\(info("")), \(info("-wal")), \(info("-shm"))] freeDisk=\(free)"
+    }
+
+    /// Pulls the real cause out of a store error that surfaces as the generic
+    /// Code 256: the sqlite primary/extended result codes and any nested
+    /// `NSUnderlyingError` chain (often a POSIX/OSStatus reason the bare code hides).
+    /// Logged once on the first store-level failure so the next crash report names
+    /// the actual cause instead of leaving us to guess.
+    private static func errorDiagnostics(_ error: NSError) -> String {
+        var parts = ["\(error.domain):\(error.code)"]
+        if let sqlite = error.userInfo["NSSQLiteErrorDomain"] { parts.append("sqlite=\(sqlite)") }
+        if let path = error.userInfo[NSFilePathErrorKey] as? String { parts.append("path=\(path)") }
+        var under = error.userInfo[NSUnderlyingErrorKey] as? NSError
+        var depth = 0
+        while let u = under, depth < 4 {
+            parts.append("under=\(u.domain):\(u.code)")
+            if let sqlite = u.userInfo["NSSQLiteErrorDomain"] { parts.append("sqlite=\(sqlite)") }
+            under = u.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+        return parts.joined(separator: " ")
     }
 
     private static var pendingSave: Task<Void, Never>?

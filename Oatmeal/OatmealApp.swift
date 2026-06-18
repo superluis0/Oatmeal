@@ -23,7 +23,15 @@ struct OatmealApp: App {
             CustomTemplate.self, Recipe.self, ChatSession.self, EmbeddingChunk.self,
             ActionItem.self, Highlight.self, MeetingPrep.self, SavedReport.self
         ])
-        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        // Keep the store in the app's OWN namespaced subdirectory rather than the
+        // shared Application Support root, so no other process's files can collide
+        // with or touch the SQLite store (a leading suspect in the recurring Code 256
+        // "file couldn't be opened" store failures). Relocate any legacy AS-root store
+        // into it once (when safe), then open whatever the effective location is.
+        migrateStoreToNamespacedDir()
+        let storeURL = StorageManager.storeURL()
+        let config = storeURL.map { ModelConfiguration(schema: schema, url: $0) }
+            ?? ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {
             return try ModelContainer(for: schema, configurations: [config])
         } catch {
@@ -32,7 +40,7 @@ struct OatmealApp: App {
             // then start fresh — `StoreBackup.restoreIfEmpty` repopulates from the
             // latest JSON backup on launch.
             Log.error("ModelContainer open failed; moving store aside", "store", error)
-            moveStoreAside()
+            moveStoreAside(storeURL: storeURL)
             do {
                 let c = try ModelContainer(for: schema, configurations: [config])
                 Log.warn("Recreated store after moving the previous one aside", "store")
@@ -292,16 +300,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Renames the default SwiftData store files aside (never deletes) so a fresh
-/// container can be created while the old data stays on disk for recovery.
-private func moveStoreAside() {
+/// Renames the SwiftData store files aside (never deletes) so a fresh container can
+/// be created while the old data stays on disk for recovery. Operates on the
+/// resolved store location (namespaced when available, else the legacy AS-root
+/// `default.store`), moving the store and its `-shm`/`-wal` sidecars together.
+private func moveStoreAside(storeURL: URL?) {
+    let fm = FileManager.default
+    let store: URL
+    if let storeURL {
+        store = storeURL
+    } else if let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+        store = appSupport.appendingPathComponent("default.store")
+    } else {
+        return
+    }
+    let dir = store.deletingLastPathComponent()
+    let base = store.lastPathComponent
+    let stamp = Int(Date().timeIntervalSince1970)
+    for suffix in ["", "-shm", "-wal"] {
+        let src = dir.appendingPathComponent(base + suffix)
+        guard fm.fileExists(atPath: src.path) else { continue }
+        let dst = dir.appendingPathComponent("\(base)\(suffix).movedaside-\(stamp)")
+        try? fm.moveItem(at: src, to: dst)
+    }
+}
+
+/// One-time relocation of a legacy store from the shared Application Support root
+/// (`…/default.store`) into the app's namespaced subdirectory (`…/Oatmeal/default.store`).
+/// Always ensures the namespaced dir exists (CoreData won't create intermediate dirs),
+/// then moves the legacy store + its sidecars in when it's SAFE to do so. Runs at launch.
+/// No-op once migrated or on a fresh install. When relocation is deferred or fails, the
+/// legacy store stays put and `StorageManager.storeURL()` keeps resolving to it, so the
+/// real data is never abandoned. The JSON backup is the final backstop.
+private func migrateStoreToNamespacedDir() {
     let fm = FileManager.default
     guard let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
-    let stamp = Int(Date().timeIntervalSince1970)
-    for name in ["default.store", "default.store-shm", "default.store-wal"] {
-        let src = appSupport.appendingPathComponent(name)
-        guard fm.fileExists(atPath: src.path) else { continue }
-        let dst = appSupport.appendingPathComponent("\(name).movedaside-\(stamp)")
-        try? fm.moveItem(at: src, to: dst)
+    let newDir = appSupport.appendingPathComponent("Oatmeal", isDirectory: true)
+    // Ensure the namespaced dir exists so a fresh install / post-migration open has
+    // somewhere to create or find the store.
+    try? fm.createDirectory(at: newDir, withIntermediateDirectories: true)
+
+    let namespaced = newDir.appendingPathComponent("default.store")
+    let legacy = appSupport.appendingPathComponent("default.store")
+    // Already migrated, or a fresh install (no legacy store) → nothing to move.
+    guard !fm.fileExists(atPath: namespaced.path), fm.fileExists(atPath: legacy.path) else { return }
+
+    // Only relocate from a CHECKPOINTED store: a non-empty `-wal` means uncommitted
+    // frames (e.g. after a crash). Moving only some of the files could split the db
+    // from its WAL, so defer to a later, clean launch — until then we keep opening the
+    // legacy store in place (see StorageManager.storeURL).
+    let legacyWAL = appSupport.appendingPathComponent("default.store-wal")
+    if let size = (try? fm.attributesOfItem(atPath: legacyWAL.path))?[.size] as? Int, size > 0 {
+        Log.warn("store relocation deferred — WAL not checkpointed (\(size)B); using legacy store", "store")
+        return
+    }
+    do {
+        for suffix in ["", "-wal", "-shm"] {
+            let src = appSupport.appendingPathComponent("default.store\(suffix)")
+            let dst = newDir.appendingPathComponent("default.store\(suffix)")
+            guard fm.fileExists(atPath: src.path), !fm.fileExists(atPath: dst.path) else { continue }
+            try fm.moveItem(at: src, to: dst)
+        }
+        Log.warn("Relocated store to namespaced dir \(newDir.path)", "store")
+    } catch {
+        // Leave the legacy store in place; storeURL() keeps resolving to it and the
+        // open-failure path + JSON backup recover if needed.
+        Log.error("store relocation failed; using legacy location", "store", error)
     }
 }

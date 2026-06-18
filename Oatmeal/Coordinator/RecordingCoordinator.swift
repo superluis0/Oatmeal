@@ -343,6 +343,20 @@ final class RecordingCoordinator {
     /// Summary + note enhancement + persist + semantic reindex. Returns false (and
     /// leaves `phase` in `.error`) if summarization fails; the transcript is kept.
     private func summarizeAndEnhance(meeting: Meeting, context: ModelContext) async -> Bool {
+        // If a save already failed at the SQLite/store level this session, the
+        // database is untrusted and reading ANY live model object below — the
+        // transcript segments (`transcriptText`), `attendeeNames`, `segments.count`
+        // — can hit an UNCATCHABLE SwiftData fault-fulfillment trap. That is the
+        // post-recording crash seen in the field: stop → summarizeAndEnhance →
+        // transcriptText. Bail before touching the model. The audio was written
+        // straight to disk (not via SwiftData), and the meeting is recovered from
+        // the JSON backup on the restart the UI is already prompting (StoreHealth →
+        // ContentView's "Oatmeal needs a restart" alert).
+        if StoreHealth.shared.degraded {
+            Log.error("skipping summarize — store degraded; awaiting restart to recover", "summary")
+            phase = .error("Couldn't finish processing — Oatmeal's database needs a restart. Your recording's audio is saved; quit and reopen to recover.")
+            return false
+        }
         // Ground the transcript + prompts in WHO is speaking, so the AI doesn't
         // confuse the note-taker ("Me") with the other participants or invent
         // affiliations.
@@ -483,6 +497,64 @@ final class RecordingCoordinator {
 
         guard await summarizeAndEnhance(meeting: meeting, context: context) else { return }
         phase = .idle
+    }
+
+    /// Rebuild a meeting from an orphaned recording — audio on disk with no meeting,
+    /// e.g. when a store failure blocked the original save. Reuses the WAV in place
+    /// under its ORIGINAL meeting id (no duplicate file), re-transcribes at full
+    /// fidelity (stereo: system = others, mic = "Me"), and summarizes. Returns the
+    /// recovered meeting so the caller can open it (nil if it couldn't start). Mirrors
+    /// `importAudio`, but keeps the id + file and uses both channels.
+    @discardableResult
+    func recoverOrphan(url: URL, context: ModelContext) async -> Meeting? {
+        guard phase == .idle else { return nil }
+        // A degraded store can't save the recovery (and reads could trap) — wait for
+        // the restart the UI is prompting; the orphan banner stays to retry after.
+        guard !StoreHealth.shared.degraded else {
+            phase = .error("Oatmeal's database needs a restart before recovering this recording. Quit and reopen, then tap Recover again.")
+            return nil
+        }
+        guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent) else { return nil }
+
+        phase = .preparingModels
+        do { try await transcription.prepare() }
+        catch { phase = .error("Failed to load speech models: \(error.localizedDescription)"); return nil }
+
+        let streams: (system: [Float], mic: [Float])
+        do { streams = try AudioImporter.loadStereo16k(from: url) }
+        catch { phase = .error("Couldn't read the recording: \(error.localizedDescription)"); return nil }
+        guard !streams.system.isEmpty || !streams.mic.isEmpty else {
+            phase = .error("That recording has no audio to recover."); return nil
+        }
+
+        let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate ?? .now
+        let meeting = Meeting(id: id, title: "Recovered recording", date: date)
+        context.insert(meeting)
+        meeting.audioPath = url.path
+        meeting.duration = Double(max(streams.system.count, streams.mic.count)) / 16_000
+
+        phase = .processing("Transcribing recovered recording…")
+        let segments: [LiveSegment]
+        do {
+            segments = try await transcription.buildTranscript(
+                systemSamples: streams.system, micSamples: streams.mic)
+        } catch {
+            phase = .error("Transcription failed: \(error.localizedDescription)"); return nil
+        }
+        for seg in segments {
+            let model = TranscriptSegment(start: seg.start, end: seg.end, speaker: seg.speaker, text: seg.text)
+            model.meeting = meeting
+            meeting.segments.append(model)
+            context.insert(model)
+        }
+        autoNameSpeakers(meeting, segments: segments)
+        SafeStore.save(context, "recover-transcript")
+
+        // summarizeAndEnhance leaves phase = .error on failure (transcript kept);
+        // either way return the meeting so the caller can open it.
+        if await summarizeAndEnhance(meeting: meeting, context: context) { phase = .idle }
+        return meeting
     }
 
     /// Best-effort pre-fill of display names from the roster. Maps the diarized

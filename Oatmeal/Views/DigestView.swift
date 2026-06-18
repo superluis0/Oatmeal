@@ -30,30 +30,17 @@ struct DigestView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.lg) {
                 scopeControls
-                statsPanel
-                Button {
-                    Task { await generate() }
-                } label: {
-                    if generating {
-                        HStack { ProgressView().controlSize(.small); Text("Generating digest…") }
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Label(saved == nil ? "Generate digest" : "Regenerate digest", systemImage: "sparkles")
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .buttonStyle(OatPrimaryButton(fullWidth: true))
-                .disabled(generating || scoped.isEmpty)
-
-                if let saved {
-                    reportCard(saved)
-                    includedList
-                } else if !generating {
+                if scoped.isEmpty {
                     OatEmptyState(
                         icon: "doc.text.magnifyingglass",
-                        title: "Cross-meeting digest",
-                        message: "Themes, open decisions, key action items, and follow-ups — synthesized across the meetings you've scoped above."
+                        title: "No meetings in this scope",
+                        message: "Pick a different scope above, or record a meeting to start building your digest."
                     )
+                } else {
+                    statsPanel
+                    actionItemsSection
+                    narrativeSection
+                    includedList
                 }
             }
             .padding(Theme.Space.lg)
@@ -114,17 +101,19 @@ struct DigestView: View {
     private var statsPanel: some View {
         let open = scoped.reduce(0) { $0 + $1.openActionItemCount }
         let done = scoped.reduce(0) { $0 + $1.doneActionItemCount }
+        let overdue = items(in: .overdue).count
+        let dueWeek = items(in: .today).count + items(in: .thisWeek).count
         return HStack(spacing: Theme.Space.sm) {
             stat("\(scoped.count)", "meetings")
-            stat("\(open)", "open tasks")
-            stat("\(done)", "done")
+            stat("\(overdue)", "overdue", tint: overdue > 0 ? Theme.danger : Theme.accent)
+            stat("\(dueWeek)", "due this week")
             stat(completionLabel(open: open, done: done), "complete")
         }
     }
 
-    private func stat(_ value: String, _ label: String) -> some View {
+    private func stat(_ value: String, _ label: String, tint: Color = Theme.accent) -> some View {
         VStack(spacing: 2) {
-            Text(value).font(.system(.title2).weight(.bold)).foregroundStyle(Theme.accent)
+            Text(value).font(.system(.title2).weight(.bold)).foregroundStyle(tint)
             Text(label).font(.caption).foregroundStyle(Theme.textSecondary)
         }
         .frame(maxWidth: .infinity)
@@ -135,6 +124,128 @@ struct DigestView: View {
         let total = open + done
         guard total > 0 else { return "—" }
         return "\(Int(Double(done) / Double(total) * 100))%"
+    }
+
+    // MARK: - Action items (live structured data)
+
+    private static let digestBuckets: [TaskDates.Bucket] = [.overdue, .today, .thisWeek, .later, .noDate]
+    /// Cap on rows rendered across all buckets so a huge "All time" scope can't
+    /// build an enormous view; the remainder is summarized in a trailing line.
+    private static let maxActionRows = 50
+
+    /// Every still-open, non-snoozed action item across the scoped meetings.
+    /// `liveActionItems` is deletion-safe, so this never traps on a removed item.
+    private var openItems: [ActionItem] {
+        scoped.flatMap { $0.liveActionItems }
+            .filter { !$0.isDone && !($0.snoozedUntil.map { $0 > .now } ?? false) }
+    }
+
+    /// Open items in one bucket, soonest-due first (mirrors `TasksView.items(in:)`).
+    private func items(in bucket: TaskDates.Bucket) -> [ActionItem] {
+        openItems.filter { TaskDates.bucket(for: $0) == bucket }
+                 .sorted { ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture) }
+    }
+
+    private struct BucketGroup: Identifiable {
+        let bucket: TaskDates.Bucket
+        let items: [ActionItem]
+        var id: String { bucket.rawValue }
+    }
+
+    /// The buckets to render, capped at `maxActionRows` total (overdue first),
+    /// plus how many open items were left out by the cap.
+    private var groupedOpenItems: (groups: [BucketGroup], overflow: Int) {
+        var groups: [BucketGroup] = []
+        var budget = Self.maxActionRows
+        for bucket in Self.digestBuckets where budget > 0 {
+            let shown = Array(items(in: bucket).prefix(budget))
+            if !shown.isEmpty {
+                groups.append(BucketGroup(bucket: bucket, items: shown))
+                budget -= shown.count
+            }
+        }
+        let shownCount = groups.reduce(0) { $0 + $1.items.count }
+        return (groups, openItems.count - shownCount)
+    }
+
+    private var actionItemsSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.md) {
+            SectionLabel(text: "Action items")
+            if openItems.isEmpty {
+                allCaughtUp
+            } else {
+                let grouped = groupedOpenItems
+                ForEach(grouped.groups) { group in
+                    bucketGroup(group.bucket, group.items)
+                }
+                if grouped.overflow > 0 {
+                    Text("+ \(grouped.overflow) more open — narrow the scope or open Tasks to see them all.")
+                        .font(.caption).foregroundStyle(Theme.textSecondary)
+                }
+            }
+        }
+    }
+
+    /// One bucket: a header + a card of reusable `ActionItemRow`s. Mirrors
+    /// `TasksView.section`/`card` so both tabs render tasks identically.
+    private func bucketGroup(_ bucket: TaskDates.Bucket, _ items: [ActionItem]) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Label("\(bucket.rawValue) (\(items.count))", systemImage: bucket.icon)
+                .font(.system(.subheadline).weight(.semibold))
+                .foregroundStyle(bucket == .overdue ? Theme.danger : Theme.textSecondary)
+            VStack(spacing: 0) {
+                ForEach(items) { item in
+                    ActionItemRow(item: item, showSource: true, onOpenMeeting: onOpenMeeting)
+                    if item.persistentModelID != items.last?.persistentModelID {
+                        Divider().overlay(Theme.hairline).padding(.leading, 36)
+                    }
+                }
+            }
+            .oatCard(padding: Theme.Space.xs)
+        }
+    }
+
+    private var allCaughtUp: some View {
+        HStack(spacing: Theme.Space.sm) {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("All caught up").font(.system(.subheadline).weight(.semibold))
+                Text("No open action items \(scopeLabel).")
+                    .font(.caption).foregroundStyle(Theme.textSecondary)
+            }
+            Spacer()
+        }
+        .oatCard(padding: Theme.Space.md)
+    }
+
+    // MARK: - AI narrative (optional layer over the live items above)
+
+    private var narrativeSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.sm) {
+            Button {
+                Task { await generate() }
+            } label: {
+                if generating {
+                    HStack { ProgressView().controlSize(.small); Text("Generating summary…") }
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Label(saved == nil ? "Generate AI summary" : "Regenerate AI summary", systemImage: "sparkles")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(OatPrimaryButton(fullWidth: true))
+            .disabled(generating || scoped.isEmpty)
+
+            if let saved {
+                reportCard(saved)
+            } else if !generating {
+                OatEmptyState(
+                    icon: "sparkles",
+                    title: "AI summary (optional)",
+                    message: "A short written recap — highlights, decisions, and follow-ups — across the meetings above. Your action items are already live above."
+                )
+            }
+        }
     }
 
     private var includedList: some View {

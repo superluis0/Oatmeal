@@ -21,6 +21,7 @@ struct MeetingListView: View {
     /// be rendering it — the cause of a SwiftData deleted-object crash.
     var onDelete: (Meeting) -> Void
     @Environment(\.modelContext) private var context
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var updateChecker = UpdateChecker.shared
 
     /// Open-task badge count, maintained by SwiftData rather than recomputed by
@@ -34,12 +35,27 @@ struct MeetingListView: View {
     @State private var folderTarget: Meeting?
     @State private var renamingFolder: Folder?
     @State private var renameText = ""
-    /// Folders the user has collapsed (default: expanded). Per-session.
-    @State private var collapsedFolders: Set<PersistentIdentifier> = []
-    @State private var unfiledExpanded = true
+    private static let collapsedFoldersKey = "sidebarCollapsedFolders"
+    /// Folders the user has collapsed, keyed by a stable per-folder string (see
+    /// `folderKey`) and persisted across launches — default is expanded. Seeded
+    /// once when the view is first created. A serialized `PersistentIdentifier`
+    /// isn't a reliable cross-launch key, so the persisted key is derived from the
+    /// folder itself.
+    @State private var collapsedFolderKeys: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: MeetingListView.collapsedFoldersKey) ?? [])
+    /// Persisted across launches too, so the sidebar reopens exactly as left.
+    @AppStorage("sidebarUnfiledExpanded") private var unfiledExpanded = true
     /// The folder currently hovered during a drag, for the drop highlight.
     @State private var dropTargetFolder: PersistentIdentifier?
     @State private var unfiledIsTarget = false
+
+    /// Unfiltered meetings, used ONLY to detect orphaned recordings — the `meetings`
+    /// passed in is search-filtered, which would falsely flag hidden meetings.
+    @Query private var allMeetings: [Meeting]
+    /// Recordings whose meeting was lost (audio on disk, no meeting) — surfaced as a
+    /// recover banner. Refreshed on appear and whenever a recording ends.
+    @State private var orphanRecordings: [OrphanRecording] = []
+    @State private var recoveringOrphanID: UUID?
 
     /// Same key AppSettings.inPersonMode reads — @AppStorage keeps this control
     /// and the Settings-window toggle in sync live.
@@ -66,6 +82,7 @@ struct MeetingListView: View {
             }
             .padding(.horizontal, Theme.Space.sm)
             .padding(.bottom, Theme.Space.sm)
+            orphanBanner
             List(selection: $selection) {
                 if folders.isEmpty {
                     ForEach(meetings) { row($0) }
@@ -75,7 +92,7 @@ struct MeetingListView: View {
                     // section so meetings can be dragged into a freshly-made folder.
                     ForEach(folders) { folder in
                         let items = meetings.filter { $0.folder?.persistentModelID == folder.persistentModelID }
-                        Section(isExpanded: expandBinding(folder.persistentModelID)) {
+                        Section(isExpanded: expandBinding(folder)) {
                             if items.isEmpty {
                                 Text("Drag meetings here")
                                     .font(.system(size: Appearance.shared.scaled(11)))
@@ -121,6 +138,16 @@ struct MeetingListView: View {
             .padding(.vertical, Theme.Space.xs)
         }
         .background(Theme.bg)
+        .onAppear { refreshOrphanRecordings() }
+        .onChange(of: allMeetings.count) { _, _ in refreshOrphanRecordings() }
+        .onChange(of: coordinator.phase) { _, newPhase in
+            // A finished or failed recording may have just left an orphan (audio on
+            // disk, meeting not saved). Rescan on terminal phases.
+            switch newPhase {
+            case .idle, .error: refreshOrphanRecordings()
+            default: break
+            }
+        }
         .navigationTitle("Oatmeal")
         .toolbar {
             ToolbarItem {
@@ -209,6 +236,64 @@ struct MeetingListView: View {
                 }
             }
             Button("Delete", role: .destructive) { delete(meeting) }
+        }
+    }
+
+    // MARK: - Unsaved-recording recovery
+
+    /// A warning banner listing recordings whose meeting was lost (audio on disk, no
+    /// meeting). One tap rebuilds the meeting from the audio. Renders nothing when
+    /// there's nothing to recover.
+    @ViewBuilder
+    private var orphanBanner: some View {
+        if !orphanRecordings.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Label(orphanRecordings.count == 1 ? "1 recording wasn’t saved"
+                                                  : "\(orphanRecordings.count) recordings weren’t saved",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption.bold())
+                    .foregroundStyle(Theme.danger)
+                Text("The audio is safe — recover it to rebuild the meeting.")
+                    .font(.caption2).foregroundStyle(Theme.textSecondary)
+                ForEach(orphanRecordings) { orphan in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(orphan.date, format: .dateTime.month().day().hour().minute())
+                                .font(.caption)
+                            Text(orphan.sizeLabel).font(.caption2).foregroundStyle(Theme.textSecondary)
+                        }
+                        Spacer(minLength: 4)
+                        if recoveringOrphanID == orphan.id {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Button("Recover") { recover(orphan) }
+                                .buttonStyle(.borderless)
+                                .disabled(coordinator.isBusy || coordinator.isRecording || recoveringOrphanID != nil)
+                        }
+                    }
+                }
+            }
+            .padding(Theme.Space.sm)
+            .background(Theme.danger.opacity(0.10),
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+            .padding(.horizontal, Theme.Space.sm)
+            .padding(.bottom, Theme.Space.sm)
+        }
+    }
+
+    private func refreshOrphanRecordings() {
+        orphanRecordings = StorageManager.orphanedRecordings(meetingIDs: Set(allMeetings.map(\.id)))
+    }
+
+    /// Rebuild the meeting from an orphaned recording at full fidelity, then open it.
+    private func recover(_ orphan: OrphanRecording) {
+        guard recoveringOrphanID == nil, !coordinator.isBusy, !coordinator.isRecording else { return }
+        recoveringOrphanID = orphan.id
+        Task { @MainActor in
+            let recovered = await coordinator.recoverOrphan(url: orphan.url, context: context)
+            recoveringOrphanID = nil
+            refreshOrphanRecordings()
+            if let recovered { selection = recovered }
         }
     }
 
@@ -303,7 +388,10 @@ struct MeetingListView: View {
     private func assign(_ meeting: Meeting, to folder: Folder?) {
         meeting.folder = folder
         // Reveal where it landed if that folder was collapsed.
-        if let folder { collapsedFolders.remove(folder.persistentModelID) }
+        if let folder {
+            collapsedFolderKeys.remove(folderKey(folder))
+            persistCollapsedFolders()
+        }
         SafeStore.save(context, "folder-assign")
     }
 
@@ -332,19 +420,43 @@ struct MeetingListView: View {
     /// Deletes the folder only — its meetings keep their data and fall back to
     /// "Unfiled" (the `Meeting.folder` relationship is `.nullify`).
     private func deleteFolder(_ folder: Folder) {
+        // Don't leave the deleted folder's collapse state lingering in UserDefaults.
+        collapsedFolderKeys.remove(folderKey(folder))
+        persistCollapsedFolders()
         context.delete(folder)
         SafeStore.save(context, "folder-delete")
     }
 
     // MARK: - Folder UI helpers
 
-    private func expandBinding(_ id: PersistentIdentifier) -> Binding<Bool> {
-        Binding(
-            get: { !collapsedFolders.contains(id) },
+    private func expandBinding(_ folder: Folder) -> Binding<Bool> {
+        let key = folderKey(folder)
+        return Binding(
+            get: { !collapsedFolderKeys.contains(key) },
             set: { isOpen in
-                if isOpen { collapsedFolders.remove(id) } else { collapsedFolders.insert(id) }
+                if isOpen { collapsedFolderKeys.remove(key) } else { collapsedFolderKeys.insert(key) }
+                persistCollapsedFolders()
             }
         )
+    }
+
+    /// A per-folder key that's stable across launches *and* renames, for persisting
+    /// sidebar collapse state. Folders carry no UUID; `createdAt` is set once at
+    /// creation and never mutated, and is unique per folder (they're created one at
+    /// a time), so it's a safe stable identity here.
+    private func folderKey(_ folder: Folder) -> String {
+        String(folder.createdAt.timeIntervalSinceReferenceDate)
+    }
+
+    private func persistCollapsedFolders() {
+        UserDefaults.standard.set(Array(collapsedFolderKeys), forKey: Self.collapsedFoldersKey)
+    }
+
+    /// Expand/collapse a sidebar section with the same animated feel as the system
+    /// disclosure triangle, skipping the animation when Reduce Motion is on. Used by
+    /// the header tap handlers so clicking a folder name toggles it, not just the arrow.
+    private func toggleSection(_ change: @escaping () -> Void) {
+        if reduceMotion { change() } else { withAnimation(.snappy, change) }
     }
 
     @ViewBuilder
@@ -361,6 +473,9 @@ struct MeetingListView: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
+        // Tapping anywhere on the header toggles the folder, so users don't have to
+        // hit the small disclosure triangle on the far side of the row.
+        .onTapGesture { toggleSection { expandBinding(folder).wrappedValue.toggle() } }
         .padding(.vertical, 2).padding(.horizontal, 4)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
@@ -384,6 +499,7 @@ struct MeetingListView: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
+        .onTapGesture { toggleSection { unfiledExpanded.toggle() } }
         .padding(.vertical, 2).padding(.horizontal, 4)
         .background(
             RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)

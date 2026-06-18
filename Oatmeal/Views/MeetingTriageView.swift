@@ -170,8 +170,13 @@ struct MeetingTriageView: View {
         }
     }
 
-    /// Structural merge (fixes over-splitting) — leaves the summary stale so the
-    /// detail view's "Update summary" surfaces. Deferred for the same reason as
+    /// Structural merge (fixes over-splitting): reassign the merged-away voice's
+    /// segments, then patch the summary the same cheap no-LLM way a rename does so
+    /// the merged-away "Speaker N" stops appearing there — honoring the speakers
+    /// step's "the summary updates as you go" promise. Without this, merging
+    /// Speaker 2 → Speaker 1 and then naming Speaker 1 leaves an orphaned
+    /// "Speaker 2" in the summary (the rename only rewrites "Speaker 1").
+    /// Matches MeetingDetailView.mergeSpeaker. Deferred for the same reason as
     /// `renameSpeaker`.
     private func mergeSpeaker(_ from: String, into target: String) {
         Task { @MainActor in
@@ -181,6 +186,9 @@ struct MeetingTriageView: View {
             for seg in meeting.orderedSegments where seg.speaker == from { seg.speaker = target }
             meeting.speakerNames[from] = nil
             meeting.relabelOwners(from: fromName, to: toName)
+            // Must come after the segment reassignment above so the staleness
+            // signature patchSummaryName re-stamps reflects the merged transcript.
+            meeting.patchSummaryName(from: fromName, to: toName)
             SafeStore.save(context, "confirm-merge")
             SemanticIndex(context: context).reindex(meeting)
         }

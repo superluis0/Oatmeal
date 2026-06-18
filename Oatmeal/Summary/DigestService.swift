@@ -20,14 +20,15 @@ struct DigestService {
 
         let system = """
         You are an analyst summarizing a set of meetings (\(scopeLabel)). Produce a
-        concise GitHub-flavored Markdown digest with these sections (omit a section
+        short GitHub-flavored Markdown narrative with these sections (omit a section
         only if genuinely empty):
-        ## Themes
-        ## Open Decisions
-        ## Open Action Items
+        ## Highlights
+        ## Decisions
         ## Follow-ups
         ## Per-meeting
-        Under "Per-meeting", give one line per meeting prefixed with its tag, e.g.
+        Do NOT list action items or todos — those are tracked separately. Focus on
+        what happened, what was decided, and what to watch next. Under "Per-meeting",
+        give one line per meeting prefixed with its tag, e.g.
         "- [#abcd] <one-line takeaway>". Base everything ONLY on the context. Be brief.
 
         MEETINGS:
