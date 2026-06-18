@@ -5,6 +5,12 @@ import SwiftUI
 /// the new version's date + bullets at the TOP and reuse the bullets for the notes.
 enum WhatsNew {
     static let entries: [(version: String, date: String, bullets: [String])] = [
+        ("0.7.6", "Jun 18, 2026", [
+            "Recover a recording that didn\u{2019}t save \u{2014} if a recording can\u{2019}t be saved, its audio is kept and now appears in the sidebar with one-tap Recover, which rebuilds the whole meeting (transcript, speakers, summary) from the audio.",
+            "More reliable storage: Oatmeal\u{2019}s database now lives in its own folder, and a crash that could happen after recording (when the database had trouble saving) is fixed.",
+            "The Digest leads with your action items now \u{2014} grouped by Overdue and Due this week, checkable, and clickable straight to the meeting, with a short AI summary below.",
+            "Click a folder\u{2019}s name in the sidebar to expand or collapse it (not just the little arrow), and Oatmeal remembers which folders you\u{2019}ve collapsed.",
+        ]),
         ("0.7.5", "Jun 17, 2026", [
             "Organize meetings into collapsible folders in the sidebar \u{2014} drag and drop (or right-click) to file them by person, company, or project.",
             "Jump around a recording with chapters: auto-detected topics you can tap to skip right to that moment (in the Transcript tab).",
