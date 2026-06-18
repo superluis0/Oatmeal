@@ -3,6 +3,14 @@
     <channel>
         <title>Oatmeal</title>
         <item>
+            <title>0.7.6</title>
+            <pubDate>Thu, 18 Jun 2026 14:22:28 -0500</pubDate>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>0.7.6</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/superluis0/Oatmeal/releases/download/v0.7.6/Oatmeal-0.7.6.zip" length="13330461" type="application/octet-stream" sparkle:edSignature="jB7USImHtEWObvYpkKaiCVMnYXNxrqHvhuIl3mz+EZJsVEgSB6pceraOfemQgqKQAZ1d/dH5vwK2mG/KZWagDw=="/>
+        </item>
+        <item>
             <title>0.7.5</title>
             <pubDate>Wed, 17 Jun 2026 12:17:42 -0500</pubDate>
             <sparkle:version>12</sparkle:version>
@@ -17,14 +25,6 @@
             <sparkle:shortVersionString>0.7.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/superluis0/Oatmeal/releases/download/v0.7.4/Oatmeal-0.7.4.zip" length="12872543" type="application/octet-stream" sparkle:edSignature="nYra2pe6PxuThQ6rlm5XeoxZQtZVOfTmuWR/rc3FN2+bJq/gf6exvT7heiwH8oy+JXDoc/5bnCWQqODaW1/1Aw=="/>
-        </item>
-        <item>
-            <title>0.7.3</title>
-            <pubDate>Tue, 16 Jun 2026 19:29:38 -0500</pubDate>
-            <sparkle:version>10</sparkle:version>
-            <sparkle:shortVersionString>0.7.3</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/superluis0/Oatmeal/releases/download/v0.7.3/Oatmeal-0.7.3.zip" length="12594051" type="application/octet-stream" sparkle:edSignature="tWiYPEiyqaGQ1+srnNhEY+xLVpLCnykRUvUrjjCi0NBi7mGk0f2sV0Xo304Pt266FXdMBx8mw2csCdrV2O3eCA=="/>
         </item>
     </channel>
 </rss>
